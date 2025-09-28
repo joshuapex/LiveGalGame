@@ -361,7 +361,7 @@ private fun CameraScreenContent(
                             colorStops = arrayOf(
                                 0.0f to Color.Transparent,  // 顶部：完全透明
                                 0.001f to Color.Transparent,  // 中间：仍然是完全透明
-                                1.0f to Color(0x99FFC0CB) // 底部：淡粉色
+                                0.5f to Color(0xCCFFC0CB) // 底部：淡粉色
                             )
                         )
                     )
