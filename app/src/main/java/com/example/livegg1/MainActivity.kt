@@ -7,6 +7,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.os.Bundle
 import android.util.Log
+import android.view.View
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -14,7 +15,7 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
-import androidx.camera.core.Preview
+import androidx.camera.core.Preview as CameraPreview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Image
@@ -54,7 +55,14 @@ import java.io.IOException
 import java.nio.ByteBuffer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.tooling.preview.Preview
+import android.content.res.Configuration
+import androidx.compose.foundation.layout.offset
 
 class MainActivity : ComponentActivity() {
 
@@ -71,6 +79,16 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // 设置全屏沉浸式模式
+        window.decorView.systemUiVisibility = (
+            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+            // 隐藏导航栏
+            or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+            // 隐藏状态栏
+            or View.SYSTEM_UI_FLAG_FULLSCREEN
+        )
+
         cameraExecutor = Executors.newSingleThreadExecutor()
 
         val permissionsToRequest = arrayOf(
@@ -205,7 +223,7 @@ fun CameraScreen(cameraExecutor: ExecutorService) {
         // 2. 绑定相机
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         val cameraProvider = cameraProviderFuture.get()
-        val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
+        val preview = CameraPreview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
         val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
         cameraProvider.unbindAll()
         cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelector, preview, imageCapture)
@@ -267,9 +285,24 @@ fun CameraScreen(cameraExecutor: ExecutorService) {
     }
 
     // --- UI 界面 ---
+    CameraScreenContent(
+        isLoading = isLoading,
+        imageToShow = imageToShow,
+        captionToShow = captionToShow,
+        previewView = { AndroidView({ previewView }, modifier = Modifier.fillMaxSize()) }
+    )
+}
+
+@Composable
+private fun CameraScreenContent(
+    isLoading: Boolean,
+    imageToShow: Bitmap?,
+    captionToShow: String,
+    previewView: @Composable () -> Unit
+) {
     Box(modifier = Modifier.fillMaxSize()) {
-        // 1. 摄像头预览一直在最底层，为拍照提供数据流，但理论上永远不可见
-        AndroidView({ previewView }, modifier = Modifier.fillMaxSize())
+        // 1. 摄像头预览或占位图一直在最底层
+        previewView()
 
         // 2. 覆盖层，根据状态显示不同内容
         when {
@@ -294,7 +327,7 @@ fun CameraScreen(cameraExecutor: ExecutorService) {
             imageToShow != null -> {
                 // 状态B: 模型加载完毕且有图片 -> 显示图片
                 Image(
-                    bitmap = imageToShow!!.asImageBitmap(),
+                    bitmap = imageToShow.asImageBitmap(),
                     contentDescription = "Captured Image",
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop
@@ -310,25 +343,52 @@ fun CameraScreen(cameraExecutor: ExecutorService) {
             }
         }
 
-        // 3. 字幕层，始终在最顶层，且仅在有内容时显示
+        // 3. 字幕层，始终在最顶层
         if (captionToShow.isNotEmpty()) {
             Column(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+                    .align(Alignment.BottomStart) // 将整个 Column 对齐到左下角
+                    .padding(start = 100.dp, bottom = 70.dp, end = 24.dp) // 使用 padding 控制精确边距
             ) {
+                val shadow = Shadow(color = Color.Black, offset = Offset(4f, 4f), blurRadius = 8f)
                 Text(
                     text = captionToShow,
-                    modifier = Modifier
-                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
                     color = Color.White,
-                    fontSize = 24.sp,
-                    textAlign = TextAlign.Center
+                    fontSize = 20.sp,
+                    textAlign = TextAlign.Start,
+                    style = TextStyle(shadow = shadow)
                 )
             }
         }
+    }
+}
+
+@Preview(
+    showBackground = true,
+    widthDp = 853, // 模拟横屏宽度
+    heightDp = 480, // 模拟横屏高度
+    uiMode = Configuration.UI_MODE_NIGHT_YES,
+    device = "spec:parent=pixel_5,orientation=landscape"
+)
+@Composable
+fun CameraScreenPreview() {
+    LiveGG1Theme {
+        // 创建一个占位的黑色 Bitmap 用于预览
+        val placeholderBitmap = Bitmap.createBitmap(853, 480, Bitmap.Config.ARGB_8888).apply {
+            eraseColor(android.graphics.Color.BLACK)
+        }
+
+        CameraScreenContent(
+            isLoading = false,
+            imageToShow = placeholderBitmap,
+            captionToShow = "这是预览字幕。",
+            previewView = {
+                // 在预览中，我们不需要真实的相机预览，所以这里可以为空或者放一个占位符
+                Box(modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.DarkGray))
+            }
+        )
     }
 }
 
