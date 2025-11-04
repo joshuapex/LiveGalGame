@@ -1,4 +1,4 @@
-package com.example.livegg1.dialog
+package com.jstone.livegalgame.dialog
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
@@ -22,9 +22,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.tooling.preview.Preview
-import com.example.livegg1.model.DialogType
-import com.example.livegg1.model.TriggerDefaults
-import com.example.livegg1.model.TriggerOption
+import com.jstone.livegalgame.model.DialogType
+import com.jstone.livegalgame.model.TriggerDefaults
+import com.jstone.livegalgame.model.TriggerOption
 
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)

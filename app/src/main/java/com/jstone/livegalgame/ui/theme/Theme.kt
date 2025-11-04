@@ -1,4 +1,4 @@
-package com.example.livegg1.ui.theme
+package com.jstone.livegalgame.ui.theme
 
 import android.app.Activity
 import android.os.Build

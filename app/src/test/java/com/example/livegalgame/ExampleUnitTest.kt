@@ -1,4 +1,4 @@
-package com.example.livegg1
+package com.jstone.livegalgame
 
 import org.junit.Test
 

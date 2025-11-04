@@ -17,3 +17,4 @@ local.properties
 signing.properties
 /release.keystore
 /release
+.vscode
