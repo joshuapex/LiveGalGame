@@ -8,11 +8,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.livegg1"
+    namespace = "com.jstone.livegalgame"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.example.livegg1"
+        applicationId = "com.jstone.livegalgame"
         minSdk = 24
         targetSdk = 36
         versionCode = 2

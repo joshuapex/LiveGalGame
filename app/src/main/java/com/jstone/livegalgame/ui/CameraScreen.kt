@@ -1,4 +1,4 @@
-package com.example.livegg1.ui
+package com.jstone.livegalgame.ui
 
 import android.content.ContentValues
 import android.content.Context
@@ -77,9 +77,9 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.draw.clip
 // ...existing imports
-import com.example.livegg1.Utils.cropBitmapToAspectRatio
-import com.example.livegg1.Utils.takePhoto
-import com.example.livegg1.ui.theme.LiveGG1Theme
+import com.jstone.livegalgame.Utils.cropBitmapToAspectRatio
+import com.jstone.livegalgame.Utils.takePhoto
+import com.jstone.livegalgame.ui.theme.LiveGG1Theme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
@@ -101,7 +101,7 @@ import java.lang.IllegalStateException
 import android.os.Build
 import android.provider.MediaStore
 import android.view.View
-import com.example.livegg1.R
+import com.jstone.livegalgame.R
 import kotlin.math.roundToInt
 import kotlin.random.Random
 import kotlin.math.min

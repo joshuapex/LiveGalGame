@@ -1,6 +1,6 @@
-package com.example.livegg1.speech
+package com.jstone.livegalgame.speech
 
-import com.example.livegg1.model.KeywordTrigger
+import com.jstone.livegalgame.model.KeywordTrigger
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 

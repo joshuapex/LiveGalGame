@@ -1,4 +1,4 @@
-package com.example.livegg1
+package com.jstone.livegalgame
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -25,13 +25,13 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.flow.collect
-import com.example.livegg1.dialog.KeywordDialog
-import com.example.livegg1.dialog.TriggerManagementDialog
-import com.example.livegg1.model.DialogType
-import com.example.livegg1.model.KeywordTrigger
-import com.example.livegg1.speech.KeywordSpeechListener
-import com.example.livegg1.ui.CameraScreen
-import com.example.livegg1.ui.theme.LiveGG1Theme
+import com.jstone.livegalgame.dialog.KeywordDialog
+import com.jstone.livegalgame.dialog.TriggerManagementDialog
+import com.jstone.livegalgame.model.DialogType
+import com.jstone.livegalgame.model.KeywordTrigger
+import com.jstone.livegalgame.speech.KeywordSpeechListener
+import com.jstone.livegalgame.ui.CameraScreen
+import com.jstone.livegalgame.ui.theme.LiveGG1Theme
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 

@@ -1,4 +1,4 @@
-package com.example.livegg1.model
+package com.jstone.livegalgame.model
 
 import java.util.UUID
 
