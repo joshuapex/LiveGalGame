@@ -99,6 +99,30 @@ function ConversationEditor() {
     .map((tag) => tag.trim())
     .filter(Boolean);
 
+  const deleteConversation = async (conversationId) => {
+    try {
+      // 确认删除
+      const confirmed = confirm(
+        `确定要删除这个对话吗？\n\n注意：这将同时删除该对话的所有消息、AI分析和建议！\n\n此操作不可撤销。`
+      );
+
+      if (!confirmed) return;
+
+      // 执行删除
+      const success = await window.electronAPI.deleteConversation(conversationId);
+
+      if (success) {
+        alert('对话已删除');
+        await loadConversations();
+      } else {
+        alert('删除失败，请重试');
+      }
+    } catch (error) {
+      console.error('删除对话失败:', error);
+      alert('删除失败：' + error.message);
+    }
+  };
+
   const toggleInsightPanel = () => setInsightPanelVisible((prev) => !prev);
 
   return (
@@ -155,14 +179,26 @@ function ConversationEditor() {
                         : 'hover:bg-surface-light dark:hover:bg-surface-dark'
                     }`}
                   >
-                    <div className="flex items-center gap-3 mb-1">
-                      <span
-                        className="inline-flex h-3 w-3 rounded-full"
-                        style={{ backgroundColor: conv.character_avatar_color || '#c51662' }}
-                      />
-                      <p className="text-xs text-text-muted-light dark:text-text-muted-dark">
-                        与 {conv.character_name || '未知对象'} 的对话
-                      </p>
+                    <div className="flex items-start justify-between mb-2">
+                      <div className="flex items-center gap-3">
+                        <span
+                          className="inline-flex h-3 w-3 rounded-full"
+                          style={{ backgroundColor: conv.character_avatar_color || '#c51662' }}
+                        />
+                        <p className="text-xs text-text-muted-light dark:text-text-muted-dark">
+                          与 {conv.character_name || '未知对象'} 的对话
+                        </p>
+                      </div>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteConversation(conv.id);
+                        }}
+                        className="p-1 text-red-500 hover:bg-red-500/10 rounded transition-colors"
+                        title="删除对话"
+                      >
+                        <span className="material-symbols-outlined text-sm">delete</span>
+                      </button>
                     </div>
                     <h3 className="text-sm font-semibold text-text-light dark:text-text-dark mb-1">
                       {conv.title || '无标题对话'}
@@ -178,7 +214,6 @@ function ConversationEditor() {
               )}
             </div>
           </div>
-
         </div>
       </aside>
 
@@ -194,6 +229,16 @@ function ConversationEditor() {
               </p>
             )}
           </div>
+          {selectedConversation && (
+            <button
+              onClick={() => deleteConversation(selectedConversation)}
+              className="p-2 text-red-500 hover:bg-red-500/10 rounded-lg transition-colors flex items-center gap-2"
+              title="删除对话"
+            >
+              <span className="material-symbols-outlined text-sm">delete</span>
+              删除对话
+            </button>
+          )}
         </div>
 
         <div className="flex-1 min-h-0 overflow-y-auto space-y-6">

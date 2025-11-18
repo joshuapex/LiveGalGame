@@ -1,116 +1,110 @@
-LiveGalGame Desktop - 开发总览
+# LiveGalGame Desktop
 
-概述
-LiveGalGame Desktop 是基于 Electron 的跨平台桌面应用（Windows/macOS）。它将移动端原型的“准备 → 实时辅助 → 复盘学习”核心用户旅程重构为桌面体验：与任意线上聊天工具（微信、QQ、Telegram、Discord、Zoom/Teams 等）并行工作，通过浮动 HUD 提供实时转录、AI 建议与即时反馈动画，并在主窗体中完成对话归档与复盘分析。
+LiveGalGame Desktop 是基于 Electron 的跨平台桌面应用（Windows/macOS），旨在为用户提供实时的对话辅助与复盘学习体验。它通过浮动 HUD 叠加在任意聊天应用之上，提供实时语音转录、AI 建议与即时反馈。
 
-关键差异（桌面版相对移动端）
-- 无摄像头相关能力与权限请求；仅麦克风与系统音频捕获。
-- 面向“线上聊天”的并行辅助：以半透明浮窗（HUD）叠加在任意聊天应用之上，不干扰当前窗口焦点。
-- 系统音频采集：Windows 通过 WASAPI Loopback（Electron desktopCapturer）；macOS 通过屏幕共享音轨或虚拟声卡方案（详见 spec/audio-capture-tech-note.md）。
-- 权限与安全模型按桌面系统规范（麦克风、屏幕录制/系统音频、辅助功能/可选的快捷键监听）。
+## 系统要求
 
-仓库结构（文档）
-- spec/prd-desktop.md 桌面版 PRD（以核心用户旅程为主线）
-- spec/tech-architecture.md 技术架构与模块边界
-- spec/audio-capture-tech-note.md 系统音频与麦克风采集技术方案
-- spec/llm-integration.md LLM/语音模型集成与配置体验
-- spec/hud-ux.md HUD 浮窗交互与状态机
-- spec/data-model.md 数据模型与存储
-- spec/build-and-release.md 构建、签名与发布（Win/mac）
-- spec/privacy-and-permissions.md 隐私、权限与安全
-- spec/test-plan.md 测试计划与验收标准
+### macOS
+- macOS 12 (Monterey) 或更高版本
+- Xcode Command Line Tools (运行 `xcode-select --install` 安装)
+- Node.js 20+
+- pnpm 8+
 
-本地开发（概览）
-1) Node.js 20+，pnpm 8+（建议）
-2) 克隆仓库并安装依赖：`pnpm install`
-3) 开发启动：`pnpm dev`（主进程 + 渲染器热重载）
-4) 打包：`pnpm build:win` / `pnpm build:mac`（详见 spec/build-and-release.md）
+### Windows
+- Windows 10/11
+- Visual Studio Build Tools (包含 "Desktop development with C++" 工作负载)
+- Node.js 20+
+- pnpm 8+
+- Python 3.x (用于 node-gyp 构建)
 
-## 快速启动命令
+## 快速开始
 
-### 安装依赖
+### 1. 获取代码
 ```bash
-cd /Users/cccmmmdd/LiveGalGame/desktop
+git clone <repository-url>
+cd LiveGalGame/desktop
+```
+
+### 2. 安装依赖
+安装项目依赖：
+```bash
 pnpm install
 ```
 
-### 开发模式启动
+**关键步骤**：安装并编译原生依赖（Electron 环境）：
+```bash
+pnpm exec electron-builder install-app-deps
+```
+*注意：此步骤对于 `better-sqlite3` 和 `sharp` 等原生模块在 Electron 中正常工作至关重要。如果遇到 `NODE_MODULE_VERSION` 不匹配的错误，请务必重新运行此命令。*
+
+### 3. 配置语音识别 (ASR)
+本项目使用 `whisper.cpp` 进行本地高性能语音识别。
+
+**对于 macOS (Apple Silicon)**: 预编译的二进制文件已包含在项目中，无需编译。
+
+**对于其他平台**: 如果你的平台是 Windows 或 macOS (Intel Silicon)，需要编译 whisper CLI：
+```bash
+npm run setup-whisper-cpp
+```
+*此脚本会自动编译 whisper.cpp 并生成 CLI 工具。编译成功后，二进制文件会保存在 `third_party/whisper.cpp/build/bin/whisper-cli`*
+
+**下载语音模型**（所有平台都需要）：
+```bash
+npm run download-ggml-models
+```
+*默认下载 `base` 模型（约 140MB）。模型文件将保存在 `models/` 目录下。*
+
+### 4. 启动开发环境
 ```bash
 pnpm dev
 ```
-启动后，Electron 窗口会自动打开，默认显示主界面。开发模式下会自动打开开发者工具。
+此命令将同时启动：
+- Vite 开发服务器 (渲染进程)
+- Electron 主进程
 
-### 页面导航
-- **总览**: 显示统计数据和最近对话
-- **攻略对象**: 管理所有攻略对象（即将推出）
-- **对话编辑器**: 编辑对话内容（即将推出）
-- **LLM 配置**: 配置 AI 模型（即将推出）
-- **设置**: 应用设置（即将推出）
+启动后，你应该能看到主窗口。点击 "实时助手" 或使用快捷键可以打开 HUD 浮窗。
 
-### 快捷键
-- **Ctrl+R** (Windows/Linux) 或 **Cmd+R** (macOS): 刷新窗口
-- **Ctrl+Shift+I** (Windows/Linux) 或 **Cmd+Shift+I** (macOS): 打开/关闭开发者工具
-- **ESC**: 预留快捷键（后续用于 HUD 最小化）
+## 常用命令
 
-### 功能测试步骤
-1. **页面导航**: 点击左侧导航菜单（总览/攻略对象/对话编辑器等），查看页面切换
-   - 点击"对话编辑器"导航菜单，应该跳转到对话编辑器页面
-   - 点击"返回总览"按钮，应该回到总览页
-2. **统计数据**: 查看总览页的4个统计卡片（攻略对象/对话/分支/故事标记）
-3. **最近对话**: 查看对话卡片列表，悬停显示编辑按钮
-4. **创建对话**: 点击"新对话"按钮或"创建新对话"卡片，应该跳转到对话编辑器
-5. **实时助手**: 点击"实时助手"按钮（后续将打开HUD浮窗）
+| 命令 | 说明 |
+| --- | --- |
+| `pnpm dev` | 启动开发环境 |
+| `pnpm build:mac` | 构建 macOS 应用 (.dmg) |
+| `pnpm build:win` | 构建 Windows 应用 (.exe) |
+| `npm run setup-whisper-cpp` | 编译 whisper.cpp 插件 |
+| `npm run download-ggml-models` | 下载 ASR 模型 |
 
-页面跳转已实现：
-- 总览页 → 对话编辑器：左侧导航菜单或"创建新对话"卡片
-- 对话编辑器 → 总览页：左侧"返回总览"按钮
+## 故障排除
 
-### 生产环境构建
+### 1. `better-sqlite3` 或 `sharp` 报错
+如果启动时遇到类似 `was compiled against a different Node.js version` 的错误：
 ```bash
-# Windows 安装包
-pnpm build:win
-
-# macOS 安装包
-pnpm build:mac
-
-# 或通用构建
-pnpm build
+# 重新编译原生依赖
+pnpm exec electron-builder install-app-deps
+```
+对于 `sharp` 的特定问题，也可以尝试：
+```bash
+npm rebuild sharp --build-from-source
 ```
 
-构建输出在 `dist/` 目录下。
+### 2. Whisper Addon 未找到
+确保你已经运行了 `npm run setup-whisper-cpp` 并且编译成功。检查 `third_party/whisper.cpp/examples/addon.node/build/Release/addon.node` 是否存在。
 
-网络与下载加速（可选）
-- 若需要下载外部依赖（如语音/ASR 模型或静态资源），可先执行本地代理命令 `dl1` 来启用代理以加速；大文件下载建议采用多进程/分片并发方式（实现细节在后续实现阶段落地）。
+### 3. 麦克风无声音
+- **macOS**: 确保终端或应用已获得麦克风权限（系统设置 -> 隐私与安全性 -> 麦克风）。
+- **Windows**: 检查系统声音设置中的输入设备。
+- 在应用内的 HUD 设置中，确保选择了正确的音频输入设备。
 
-最低系统要求
-- Windows 10 19045+（x64/arm64 可选）、macOS 12+（Intel/Apple Silicon）
-- 麦克风可用；若需捕获系统音频：Windows 无需额外驱动，macOS 需屏幕录制权限或使用虚拟声卡
+## 项目结构
 
-## 开发进度
+- `src/main.js`: Electron 主进程入口
+- `src/preload.js`: 预加载脚本，处理 IPC 安全通信
+- `src/renderer/`: React 前端代码 (Vite)
+- `src/db/`: 数据库管理 (better-sqlite3)
+- `src/asr/`: 语音识别服务 (whisper.cpp / transformers.js)
+- `scripts/`: 辅助脚本 (模型下载、编译等)
 
-### 已完成阶段
-- **阶段 0**: 基础项目搭建 ✅
-  - Electron 项目初始化
-  - 基础文件结构创建
-  - 开发环境配置
-
-- **阶段 1**: 主窗口UI框架 ✅
-  - 窗口配置和快捷键
-  - 三栏布局（对话列表/对话详情/AI分析）
-  - 对话列表组件（支持切换）
-  - 对话详情组件（消息气泡）
-  - AI分析面板（动态洞察、标签管理）
-
-### 下一步计划
-- **阶段 1.6**: ✅ 已完成 - 将对话编辑器独立为单独页面 `conversation-editor.html`
-- **阶段 2**: HUD浮窗基础（进行中）
-- **阶段 3**: 音频采集与权限
-- **阶段 4**: Mock语音识别和LLM集成
-- **阶段 5**: 即时反馈系统（好感度动画）
-
-完整开发计划详见：`/Users/cccmmmdd/LiveGalGame/desktop/DEVELOPMENT_PLAN.md`
-
-## 版权与许可
-根据企业内部策略补充。默认保留所有权利。
+## 贡献指南
+欢迎提交 Issue 和 Pull Request。开发前请阅读 `DEVELOPMENT_PLAN.md` 了解开发计划。
 
 

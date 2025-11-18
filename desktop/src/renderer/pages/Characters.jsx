@@ -8,6 +8,7 @@ function Characters() {
   const [selectedCharacter, setSelectedCharacter] = useState(null);
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [characterDetails, setCharacterDetails] = useState(null);
+  const [showAddCharacterModal, setShowAddCharacterModal] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -63,6 +64,31 @@ function Characters() {
     setShowDetailModal(false);
     setSelectedCharacter(null);
     setCharacterDetails(null);
+  };
+
+  const deleteCharacter = async (characterId, characterName) => {
+    try {
+      // 确认删除
+      const confirmed = confirm(
+        `确定要删除角色 "${characterName}" 吗？\n\n注意：这将同时删除该角色的所有对话、消息和相关数据！\n\n此操作不可撤销。`
+      );
+
+      if (!confirmed) return;
+
+      // 执行删除
+      const success = await window.electronAPI.deleteCharacter(characterId);
+
+      if (success) {
+        alert(`角色 "${characterName}" 已删除`);
+        await loadCharacters();
+        await loadStatistics();
+      } else {
+        alert('删除失败，请重试');
+      }
+    } catch (error) {
+      console.error('删除角色失败:', error);
+      alert('删除失败：' + error.message);
+    }
   };
 
   const getAvatarGradient = (color) => {
@@ -128,6 +154,16 @@ function Characters() {
         </div>
       </div>
 
+      <div className="flex justify-end mb-4">
+        <button
+          onClick={() => setShowAddCharacterModal(true)}
+          className="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors flex items-center gap-2"
+        >
+          <span className="material-symbols-outlined text-sm">add</span>
+          添加角色
+        </button>
+      </div>
+
       {/* 攻略对象列表 */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {loading ? (
@@ -150,15 +186,26 @@ function Characters() {
                 key={character.id}
                 className="bg-white dark:bg-surface-dark rounded-xl p-6 border border-surface-light dark:border-surface-dark hover:shadow-lg transition-shadow"
               >
-                <div className="flex items-center gap-4 mb-4">
-                  <div className={`w-16 h-16 rounded-full ${avatarGradient} flex items-center justify-center text-white text-xl font-bold`}>
-                    {firstLetter}
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-4">
+                    <div className={`w-16 h-16 rounded-full ${avatarGradient} flex items-center justify-center text-white text-xl font-bold`}>
+                      {firstLetter}
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-bold">{character.name}</h3>
+                      <p className="text-sm text-text-muted-light dark:text-text-muted-dark">
+                        {character.relationship_label}
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <h3 className="text-lg font-bold">{character.name}</h3>
-                    <p className="text-sm text-text-muted-light dark:text-text-muted-dark">
-                      {character.relationship_label}
-                    </p>
+                  <div className="flex gap-1">
+                    <button
+                      onClick={() => deleteCharacter(character.id, character.name)}
+                      className="p-2 text-red-500 hover:bg-red-500/10 rounded-lg transition-colors"
+                      title="删除角色"
+                    >
+                      <span className="material-symbols-outlined text-sm">delete</span>
+                    </button>
                   </div>
                 </div>
 
@@ -232,7 +279,151 @@ function Characters() {
           }}
         />
       )}
+
+      {/* 添加角色弹窗 */}
+      {showAddCharacterModal && (
+        <AddCharacterModal
+          onClose={() => setShowAddCharacterModal(false)}
+          onSaved={async () => {
+            await loadCharacters();
+            await loadStatistics();
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+// 添加角色弹窗组件
+function AddCharacterModal({ onClose, onSaved }) {
+  const [formData, setFormData] = useState({
+    name: '',
+    nickname: '',
+    relationship_label: '',
+    avatar_color: '#ff6b6b',
+    affinity: 50,
+    notes: ''
+  });
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+
+    if (!formData.name.trim()) {
+      alert('请输入角色名称');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const success = await window.electronAPI.createCharacter(formData);
+
+      if (success) {
+        alert('角色添加成功！');
+        onSaved();
+        onClose();
+      } else {
+        alert('添加失败，请重试');
+      }
+    } catch (error) {
+      console.error('添加角色失败:', error);
+      alert('添加失败：' + error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <ModalWrapper onClose={onClose} title="添加新角色">
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <label className="block text-sm font-medium text-text-light dark:text-text-dark mb-2">
+            角色名称 *
+          </label>
+          <input
+            type="text"
+            value={formData.name}
+            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+            className="w-full px-3 py-2 border border-surface-light dark:border-surface-dark rounded-lg bg-surface-light dark:bg-surface-dark text-text-light dark:text-text-dark focus:outline-none focus:ring-2 focus:ring-primary/50"
+            placeholder="例如：小樱"
+            required
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-text-light dark:text-text-dark mb-2">
+            昵称
+          </label>
+          <input
+            type="text"
+            value={formData.nickname}
+            onChange={(e) => setFormData({ ...formData, nickname: e.target.value })}
+            className="w-full px-3 py-2 border border-surface-light dark:border-surface-dark rounded-lg bg-surface-light dark:bg-surface-dark text-text-light dark:text-text-dark focus:outline-none focus:ring-2 focus:ring-primary/50"
+            placeholder="例如：樱"
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-text-light dark:text-text-dark mb-2">
+            关系标签
+          </label>
+          <input
+            type="text"
+            value={formData.relationship_label}
+            onChange={(e) => setFormData({ ...formData, relationship_label: e.target.value })}
+            className="w-full px-3 py-2 border border-surface-light dark:border-surface-dark rounded-lg bg-surface-light dark:bg-surface-dark text-text-light dark:text-text-dark focus:outline-none focus:ring-2 focus:ring-primary/50"
+            placeholder="例如：青梅竹马、学生会长"
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-text-light dark:text-text-dark mb-2">
+            初始好感度
+          </label>
+          <div className="flex items-center gap-3">
+            <input
+              type="range"
+              min="0"
+              max="100"
+              value={formData.affinity}
+              onChange={(e) => setFormData({ ...formData, affinity: parseInt(e.target.value) })}
+              className="flex-1"
+            />
+            <span className="text-sm font-medium">{formData.affinity}%</span>
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-text-light dark:text-text-dark mb-2">
+            备注
+          </label>
+          <textarea
+            value={formData.notes}
+            onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+            className="w-full px-3 py-2 border border-surface-light dark:border-surface-dark rounded-lg bg-surface-light dark:bg-surface-dark text-text-light dark:text-text-dark focus:outline-none focus:ring-2 focus:ring-primary/50"
+            rows="3"
+            placeholder="可选：添加一些关于这个角色的备注..."
+          />
+        </div>
+
+        <div className="flex gap-3 pt-4 border-t border-surface-light dark:border-surface-dark">
+          <button
+            type="submit"
+            disabled={loading}
+            className="px-6 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {loading ? '添加中...' : '添加角色'}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-6 py-2 border border-surface-light dark:border-surface-dark rounded-lg hover:bg-surface-light dark:hover:bg-surface-dark transition-colors"
+          >
+            取消
+          </button>
+        </div>
+      </form>
+    </ModalWrapper>
   );
 }
 

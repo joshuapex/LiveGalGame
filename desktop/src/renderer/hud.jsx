@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import './hud.css';
+import audioCaptureService from '../asr/audio-capture-service.js';
+
 
 const HUD_SUGGESTIONS = [
   {
@@ -89,20 +91,20 @@ function SessionSelector({ onSessionSelected, onClose }) {
       if (!api || !api.updateConversation) {
         throw new Error('数据库API不可用');
       }
-      
+
       const updated = await api.updateConversation(conversationId, {
         title: editingTitle.trim() || '未命名对话'
       });
-      
+
       if (updated) {
         // 更新本地状态
-        setConversations(prev => prev.map(conv => 
-          conv.id === conversationId 
+        setConversations(prev => prev.map(conv =>
+          conv.id === conversationId
             ? { ...conv, title: updated.title }
             : conv
         ));
       }
-      
+
       setEditingConversationId(null);
       setEditingTitle('');
     } catch (err) {
@@ -284,7 +286,7 @@ function SessionSelector({ onSessionSelected, onClose }) {
                     </div>
                   ) : (
                     <>
-                      <h4 
+                      <h4
                         className="conversation-name"
                         onDoubleClick={(e) => {
                           e.stopPropagation();
@@ -343,7 +345,9 @@ function Hud() {
     }
   }, []);
 
-  const handleSessionSelected = (info) => {
+
+
+  const handleSessionSelected = async (info) => {
     setSessionInfo(info);
     setShowSelector(false);
     if (info.conversationId) {
@@ -351,6 +355,74 @@ function Hud() {
     } else {
       setMessages([]);
       setLoading(false);
+    }
+
+    // 自动启动 ASR
+    try {
+      const api = window.electronAPI;
+      if (!api?.asrGetAudioSources || !api?.asrStart) {
+        console.error('ASR API not available');
+        return;
+      }
+
+      // 检查音频源配置
+      const audioSources = await api.asrGetAudioSources();
+      console.log('所有音频源配置:', JSON.stringify(audioSources, null, 2));
+
+      // SQLite 返回的 is_active 可能是整数 0/1，需要兼容处理
+      const activeSources = audioSources.filter(source => {
+        const isActive = source.is_active === 1 || source.is_active === true || source.is_active === '1';
+        return isActive;
+      });
+
+      console.log('激活的音频源:', JSON.stringify(activeSources, null, 2));
+
+      // 需要至少配置两个音频源：speaker1 (用户/麦克风) 和 speaker2 (角色/系统音频)
+      const speaker1 = activeSources.find(s =>
+        s.name === 'Speaker 1' ||
+        s.name === 'speaker1' ||
+        s.name === '用户' ||
+        s.name === '用户（麦克风）'
+      );
+
+      if (!speaker1) {
+        console.error('未找到麦克风配置 (speaker1)');
+        setError('未找到麦克风配置，请在设置中配置音频源');
+        return;
+      }
+
+      // 确保有对话 ID（如果是新对话，需要先创建）
+      let conversationId = info.conversationId;
+      if (!conversationId && info.characterId) {
+        // 创建新对话
+        if (api.dbCreateConversation) {
+          const newConv = await api.dbCreateConversation({
+            character_id: info.characterId,
+            title: info.conversationName || '新对话'
+          });
+          conversationId = newConv?.id;
+          if (conversationId) {
+            setSessionInfo({ ...info, conversationId });
+          }
+        }
+      }
+
+      if (conversationId) {
+        // 1. 通知主进程开始 ASR
+        await api.asrStart(conversationId);
+
+        // 2. 在渲染进程开始捕获音频
+        try {
+          await audioCaptureService.startCapture('speaker1', speaker1.device_id);
+          console.log('Microphone capture started');
+        } catch (captureError) {
+          console.error('Failed to start microphone capture:', captureError);
+          setError(`麦克风启动失败: ${captureError.message}`);
+        }
+      }
+    } catch (error) {
+      console.error('Error starting ASR:', error);
+      setError(`启动语音识别失败：${error.message}`);
     }
   };
 
@@ -374,6 +446,57 @@ function Hud() {
       transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
     }
   }, [messages]);
+
+  // 监听 ASR 识别结果
+  useEffect(() => {
+    const api = window.electronAPI;
+    if (!api?.on || !sessionInfo?.conversationId) return;
+
+    // 监听完整句子识别结果
+    const handleSentenceComplete = async (result) => {
+      try {
+        const { sourceId, text, confidence } = result;
+        if (!text || !text.trim()) return;
+
+        // speaker1 是用户（麦克风），speaker2 是角色（系统音频）
+        const sender = sourceId === 'speaker1' ? 'user' : 'character';
+
+        // 创建消息
+        if (api.dbCreateMessage && sessionInfo.conversationId) {
+          const newMessage = await api.dbCreateMessage({
+            conversation_id: sessionInfo.conversationId,
+            sender: sender,
+            content: text.trim(),
+            timestamp: Date.now()
+          });
+
+          if (newMessage) {
+            // 更新消息列表
+            setMessages(prev => [...prev, newMessage]);
+          }
+        }
+      } catch (error) {
+        console.error('Error handling ASR result:', error);
+        setError(`处理识别结果失败：${error.message}`);
+      }
+    };
+
+    // 监听 ASR 错误
+    const handleError = (error) => {
+      console.error('ASR error:', error);
+      setError(`语音识别错误：${error.error || error.message || '未知错误'}`);
+    };
+
+    // 注册监听器
+    api.on('asr-sentence-complete', handleSentenceComplete);
+    api.on('asr-error', handleError);
+
+    return () => {
+      // 清理监听器
+      api.removeListener('asr-sentence-complete', handleSentenceComplete);
+      api.removeListener('asr-error', handleError);
+    };
+  }, [sessionInfo]);
 
   useEffect(() => {
     const handleMouseMove = (event) => {

@@ -1,6 +1,11 @@
-const Database = require('better-sqlite3');
-const path = require('path');
-const fs = require('fs');
+import Database from 'better-sqlite3';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+
+// 获取 __dirname 的 ESM 等效方式
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 class DatabaseManager {
   constructor() {
@@ -50,6 +55,9 @@ class DatabaseManager {
 
     // 初始化示例数据（如果数据库为空）
     this.seedSampleData();
+
+    // 初始化默认 ASR 配置（如果没有）
+    this.seedDefaultASRConfig();
   }
 
   // 关闭数据库连接
@@ -283,6 +291,22 @@ class DatabaseManager {
 
     stmt.run(params);
     return this.getMessageById(id);
+  }
+
+  // ========== 删除方法 ==========
+
+  // 删除对话（级联删除相关消息、AI分析、AI建议）
+  deleteConversation(conversationId) {
+    const stmt = this.db.prepare('DELETE FROM conversations WHERE id = ?');
+    const info = stmt.run(conversationId);
+    return info.changes > 0;
+  }
+
+  // 删除角色（级联删除相关对话、消息、标签关联、角色详情）
+  deleteCharacter(characterId) {
+    const stmt = this.db.prepare('DELETE FROM characters WHERE id = ?');
+    const info = stmt.run(characterId);
+    return info.changes > 0;
   }
 
   // ========== 标签相关方法 ==========
@@ -1170,7 +1194,7 @@ class DatabaseManager {
   async testLLMConnection(configData) {
     try {
       // 动态导入openai（因为它是可选依赖）
-      const OpenAI = require('openai');
+      const { default: OpenAI } = await import('openai');
       
       const config = {
         apiKey: configData.api_key,
@@ -1357,6 +1381,370 @@ class DatabaseManager {
       console.error(error.stack);
     }
   }
+
+  // ========== ASR（语音识别）相关方法 ==========
+
+  // 获取所有音频源配置
+  getAudioSources() {
+    const stmt = this.db.prepare('SELECT * FROM audio_sources ORDER BY created_at ASC');
+    return stmt.all();
+  }
+
+  // 获取单个音频源配置
+  getAudioSourceById(id) {
+    const stmt = this.db.prepare('SELECT * FROM audio_sources WHERE id = ?');
+    return stmt.get(id);
+  }
+
+  // 创建音频源配置
+  createAudioSource(sourceData) {
+    const stmt = this.db.prepare(`
+      INSERT INTO audio_sources (id, name, is_active, device_id, device_name, created_at, updated_at)
+      VALUES (@id, @name, @is_active, @device_id, @device_name, @created_at, @updated_at)
+    `);
+
+    const info = stmt.run({
+      id: sourceData.id || this.generateId(),
+      name: sourceData.name,
+      is_active: sourceData.is_active !== undefined ? sourceData.is_active : 0,
+      device_id: sourceData.device_id || null,
+      device_name: sourceData.device_name || null,
+      created_at: Date.now(),
+      updated_at: Date.now()
+    });
+
+    return this.getAudioSourceById(sourceData.id || info.lastInsertRowid);
+  }
+
+  // 更新音频源配置
+  updateAudioSource(id, updates) {
+    const fields = [];
+    const values = { id };
+
+    if (updates.name !== undefined) {
+      fields.push('name = @name');
+      values.name = updates.name;
+    }
+    if (updates.is_active !== undefined) {
+      fields.push('is_active = @is_active');
+      values.is_active = updates.is_active;
+    }
+    if (updates.device_id !== undefined) {
+      fields.push('device_id = @device_id');
+      values.device_id = updates.device_id;
+    }
+    if (updates.device_name !== undefined) {
+      fields.push('device_name = @device_name');
+      values.device_name = updates.device_name;
+    }
+
+    fields.push('updated_at = @updated_at');
+    values.updated_at = Date.now();
+
+    const stmt = this.db.prepare(`
+      UPDATE audio_sources
+      SET ${fields.join(', ')}
+      WHERE id = @id
+    `);
+
+    const info = stmt.run(values);
+    return info.changes > 0 ? this.getAudioSourceById(id) : null;
+  }
+
+  // 获取所有 ASR 配置
+  getASRConfigs() {
+    const stmt = this.db.prepare('SELECT * FROM asr_configs ORDER BY created_at ASC');
+    return stmt.all();
+  }
+
+  // 获取默认 ASR 配置
+  getDefaultASRConfig() {
+    const stmt = this.db.prepare('SELECT * FROM asr_configs WHERE is_default = 1 LIMIT 1');
+    return stmt.get();
+  }
+
+  // 获取指定 ASR 配置
+  getASRConfigById(id) {
+    const stmt = this.db.prepare('SELECT * FROM asr_configs WHERE id = ?');
+    return stmt.get(id);
+  }
+
+  // 创建 ASR 配置
+  createASRConfig(configData) {
+    const stmt = this.db.prepare(`
+      INSERT INTO asr_configs (
+        id, model_name, language, enable_vad, sentence_pause_threshold,
+        retain_audio_files, audio_retention_days, audio_storage_path,
+        is_default, created_at, updated_at
+      )
+      VALUES (
+        @id, @model_name, @language, @enable_vad, @sentence_pause_threshold,
+        @retain_audio_files, @audio_retention_days, @audio_storage_path,
+        @is_default, @created_at, @updated_at
+      )
+    `);
+
+    const info = stmt.run({
+      id: configData.id || this.generateId(),
+      model_name: configData.model_name || 'whisper-base',
+      language: configData.language || 'zh',
+      enable_vad: configData.enable_vad !== undefined ? configData.enable_vad : 1,
+      sentence_pause_threshold: configData.sentence_pause_threshold || 1.0,
+      retain_audio_files: configData.retain_audio_files !== undefined ? configData.retain_audio_files : 0,
+      audio_retention_days: configData.audio_retention_days || 30,
+      audio_storage_path: configData.audio_storage_path || null,
+      is_default: configData.is_default !== undefined ? configData.is_default : 0,
+      created_at: Date.now(),
+      updated_at: Date.now()
+    });
+
+    return this.getASRConfigById(configData.id || info.lastInsertRowid);
+  }
+
+  // 更新 ASR 配置
+  updateASRConfig(id, updates) {
+    const fields = [];
+    const values = { id };
+
+    if (updates.model_name !== undefined) {
+      fields.push('model_name = @model_name');
+      values.model_name = updates.model_name;
+    }
+    if (updates.language !== undefined) {
+      fields.push('language = @language');
+      values.language = updates.language;
+    }
+    if (updates.enable_vad !== undefined) {
+      fields.push('enable_vad = @enable_vad');
+      values.enable_vad = updates.enable_vad;
+    }
+    if (updates.sentence_pause_threshold !== undefined) {
+      fields.push('sentence_pause_threshold = @sentence_pause_threshold');
+      values.sentence_pause_threshold = updates.sentence_pause_threshold;
+    }
+    if (updates.retain_audio_files !== undefined) {
+      fields.push('retain_audio_files = @retain_audio_files');
+      values.retain_audio_files = updates.retain_audio_files;
+    }
+    if (updates.audio_retention_days !== undefined) {
+      fields.push('audio_retention_days = @audio_retention_days');
+      values.audio_retention_days = updates.audio_retention_days;
+    }
+    if (updates.audio_storage_path !== undefined) {
+      fields.push('audio_storage_path = @audio_storage_path');
+      values.audio_storage_path = updates.audio_storage_path;
+    }
+
+    fields.push('updated_at = @updated_at');
+    values.updated_at = Date.now();
+
+    const stmt = this.db.prepare(`
+      UPDATE asr_configs
+      SET ${fields.join(', ')}
+      WHERE id = @id
+    `);
+
+    const info = stmt.run(values);
+    return info.changes > 0 ? this.getASRConfigById(id) : null;
+  }
+
+  // 设置默认 ASR 配置
+  setDefaultASRConfig(id) {
+    const transaction = this.db.transaction(() => {
+      // 先将所有配置设为非默认
+      this.db.prepare('UPDATE asr_configs SET is_default = 0').run();
+      // 然后设置指定配置为默认
+      const stmt = this.db.prepare('UPDATE asr_configs SET is_default = 1 WHERE id = ?');
+      return stmt.run(id);
+    });
+
+    const info = transaction();
+    return info.changes > 0;
+  }
+
+  // 保存语音识别记录
+  saveSpeechRecord(recordData) {
+    const stmt = this.db.prepare(`
+      INSERT INTO speech_recognition_records (
+        id, conversation_id, source_id, message_id,
+        audio_data, audio_file_path, audio_duration,
+        recognized_text, confidence, start_time, end_time,
+        status, error_message, created_at, updated_at
+      )
+      VALUES (
+        @id, @conversation_id, @source_id, @message_id,
+        @audio_data, @audio_file_path, @audio_duration,
+        @recognized_text, @confidence, @start_time, @end_time,
+        @status, @error_message, @created_at, @updated_at
+      )
+    `);
+
+    const info = stmt.run({
+      id: recordData.id || this.generateId(),
+      conversation_id: recordData.conversation_id,
+      source_id: recordData.source_id,
+      message_id: recordData.message_id || null,
+      audio_data: recordData.audio_data || null,
+      audio_file_path: recordData.audio_file_path || null,
+      audio_duration: recordData.audio_duration || null,
+      recognized_text: recordData.recognized_text || null,
+      confidence: recordData.confidence || null,
+      start_time: recordData.start_time,
+      end_time: recordData.end_time || null,
+      status: recordData.status || 'recording',
+      error_message: recordData.error_message || null,
+      created_at: Date.now(),
+      updated_at: Date.now()
+    });
+
+    return this.getSpeechRecordById(recordData.id || info.lastInsertRowid);
+  }
+
+  // 获取语音识别记录
+  getSpeechRecordById(id) {
+    const stmt = this.db.prepare(`
+      SELECT sr.*, asrc.name as source_name
+      FROM speech_recognition_records sr
+      LEFT JOIN audio_sources asrc ON sr.source_id = asrc.id
+      WHERE sr.id = ?
+    `);
+    return stmt.get(id);
+  }
+
+  // 更新语音识别记录
+  updateSpeechRecord(id, updates) {
+    const fields = [];
+    const values = { id };
+
+    if (updates.message_id !== undefined) {
+      fields.push('message_id = @message_id');
+      values.message_id = updates.message_id;
+    }
+    if (updates.audio_data !== undefined) {
+      fields.push('audio_data = @audio_data');
+      values.audio_data = updates.audio_data;
+    }
+    if (updates.audio_file_path !== undefined) {
+      fields.push('audio_file_path = @audio_file_path');
+      values.audio_file_path = updates.audio_file_path;
+    }
+    if (updates.audio_duration !== undefined) {
+      fields.push('audio_duration = @audio_duration');
+      values.audio_duration = updates.audio_duration;
+    }
+    if (updates.recognized_text !== undefined) {
+      fields.push('recognized_text = @recognized_text');
+      values.recognized_text = updates.recognized_text;
+    }
+    if (updates.confidence !== undefined) {
+      fields.push('confidence = @confidence');
+      values.confidence = updates.confidence;
+    }
+    if (updates.end_time !== undefined) {
+      fields.push('end_time = @end_time');
+      values.end_time = updates.end_time;
+    }
+    if (updates.status !== undefined) {
+      fields.push('status = @status');
+      values.status = updates.status;
+    }
+    if (updates.error_message !== undefined) {
+      fields.push('error_message = @error_message');
+      values.error_message = updates.error_message;
+    }
+
+    fields.push('updated_at = @updated_at');
+    values.updated_at = Date.now();
+
+    const stmt = this.db.prepare(`
+      UPDATE speech_recognition_records
+      SET ${fields.join(', ')}
+      WHERE id = @id
+    `);
+
+    const info = stmt.run(values);
+    return info.changes > 0 ? this.getSpeechRecordById(id) : null;
+  }
+
+  // 获取对话的语音识别记录
+  getSpeechRecordsByConversation(conversationId) {
+    const stmt = this.db.prepare(`
+      SELECT sr.*, asrc.name as source_name
+      FROM speech_recognition_records sr
+      LEFT JOIN audio_sources asrc ON sr.source_id = asrc.id
+      WHERE sr.conversation_id = ?
+      ORDER BY sr.start_time ASC
+    `);
+    return stmt.all(conversationId);
+  }
+
+  // 删除过期的语音识别记录（清理音频文件）
+  cleanupExpiredAudioFiles(retentionDays) {
+    const cutoffTime = Date.now() - (retentionDays * 24 * 60 * 60 * 1000);
+
+    const stmt = this.db.prepare(`
+      SELECT id, audio_file_path
+      FROM speech_recognition_records
+      WHERE audio_file_path IS NOT NULL
+        AND created_at < ?
+    `);
+
+    const expiredRecords = stmt.all(cutoffTime);
+
+    // 删除文件和数据库记录
+    const deleteStmt = this.db.prepare(`
+      UPDATE speech_recognition_records
+      SET audio_file_path = NULL, audio_data = NULL
+      WHERE id = ?
+    `);
+
+    let deletedCount = 0;
+    for (const record of expiredRecords) {
+      if (record.audio_file_path && fs.existsSync(record.audio_file_path)) {
+        try {
+          fs.unlinkSync(record.audio_file_path);
+          deleteStmt.run(record.id);
+          deletedCount++;
+        } catch (err) {
+          console.error(`Error deleting audio file ${record.audio_file_path}:`, err);
+        }
+      }
+    }
+
+    return deletedCount;
+  }
+
+  // 初始化默认 ASR 配置（如果没有配置的话）
+  seedDefaultASRConfig() {
+    try {
+      const count = this.db.prepare('SELECT COUNT(*) as count FROM asr_configs').get().count;
+
+      if (count === 0) {
+        console.log('No ASR config found, creating default config...');
+
+        const defaultConfig = {
+          model_name: 'whisper-base',
+          language: 'zh',
+          enable_vad: 1,
+          sentence_pause_threshold: 1.0,
+          retain_audio_files: 0,
+          audio_retention_days: 30,
+          audio_storage_path: null,
+          is_default: 1
+        };
+
+        const config = this.createASRConfig(defaultConfig);
+        console.log('Default ASR config created:', config);
+        return config;
+      } else {
+        console.log(`ASR configs already exist (${count} configs found), skipping default config creation`);
+        return null;
+      }
+    } catch (error) {
+      console.error('Error seeding default ASR config:', error);
+      return null;
+    }
+  }
 }
 
-module.exports = DatabaseManager;
+export default DatabaseManager;

@@ -1,6 +1,12 @@
-const { app, BrowserWindow, globalShortcut, ipcMain } = require('electron');
-const path = require('path');
-const DatabaseManager = require('./db/database');
+import { app, BrowserWindow, globalShortcut, ipcMain, screen } from 'electron';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import DatabaseManager from './db/database.js';
+import ASRManager from './asr/asr-manager.js';
+
+// 获取 __dirname 的 ESM 等效方式
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // 主窗口实例
 let mainWindow;
@@ -235,6 +241,16 @@ function setupIPC() {
     }
   });
 
+  // 创建对话
+  ipcMain.handle('db-create-conversation', (event, conversationData) => {
+    try {
+      return db.createConversation(conversationData);
+    } catch (error) {
+      console.error('Error creating conversation:', error);
+      return null;
+    }
+  });
+
   // 获取角色的对话
   ipcMain.handle('db-get-conversations-by-character', (event, characterId) => {
     try {
@@ -242,6 +258,16 @@ function setupIPC() {
     } catch (error) {
       console.error('Error getting conversations:', error);
       return [];
+    }
+  });
+
+  // 创建消息
+  ipcMain.handle('db-create-message', (event, messageData) => {
+    try {
+      return db.createMessage(messageData);
+    } catch (error) {
+      console.error('Error creating message:', error);
+      return null;
     }
   });
 
@@ -270,7 +296,12 @@ function setupIPC() {
     try {
       return db.getStatistics();
     } catch (error) {
-      console.error('Error getting statistics:', error);
+      // 避免 EPIPE 错误，使用安全的错误处理
+      try {
+        console.error('Error getting statistics:', error);
+      } catch (logError) {
+        // 如果 console.error 也失败，忽略
+      }
       return {
         characterCount: 0,
         conversationCount: 0,
@@ -369,6 +400,26 @@ function setupIPC() {
     }
   });
 
+  // 删除对话
+  ipcMain.handle('db-delete-conversation', (event, conversationId) => {
+    try {
+      return db.deleteConversation(conversationId);
+    } catch (error) {
+      console.error('Error deleting conversation:', error);
+      return false;
+    }
+  });
+
+  // 删除角色
+  ipcMain.handle('db-delete-character', (event, characterId) => {
+    try {
+      return db.deleteCharacter(characterId);
+    } catch (error) {
+      console.error('Error deleting character:', error);
+      return false;
+    }
+  });
+
   // ========== LLM配置相关IPC处理器 ==========
 
   // 保存LLM配置
@@ -442,12 +493,195 @@ function setupIPC() {
   });
 
   console.log('Database IPC handlers registered');
+
+  // ========== ASR（语音识别）IPC处理器 ==========
+
+  // ASR 管理器实例（延迟加载）
+  let asrManager = null;
+
+  // 初始化 ASR 管理器
+  ipcMain.handle('asr-initialize', async (event, conversationId) => {
+    try {
+      if (!asrManager) {
+        asrManager = new ASRManager();
+      }
+      return await asrManager.initialize(conversationId);
+    } catch (error) {
+      console.error('Error initializing ASR:', error);
+      throw error;
+    }
+  });
+
+  // 处理音频数据
+  ipcMain.on('asr-audio-data', async (event, data) => {
+    try {
+      if (!asrManager) {
+        console.warn('ASRManager not initialized');
+        return;
+      }
+
+      const result = await asrManager.processAudioData(data);
+
+      // 如果有识别结果，发送给所有窗口
+      if (result) {
+        const windows = BrowserWindow.getAllWindows();
+        windows.forEach(window => {
+          window.webContents.send('asr-sentence-complete', result);
+        });
+      }
+    } catch (error) {
+      console.error('Error processing audio data:', error);
+
+      // 发送错误消息
+      const windows = BrowserWindow.getAllWindows();
+      windows.forEach(window => {
+        window.webContents.send('asr-error', {
+          sourceId: data.sourceId,
+          error: error.message
+        });
+      });
+    }
+  });
+
+  // 开始 ASR
+  ipcMain.handle('asr-start', async (event, conversationId) => {
+    try {
+      if (!asrManager) {
+        asrManager = new ASRManager();
+      }
+      await asrManager.start(conversationId);
+      return { success: true };
+    } catch (error) {
+      console.error('Error starting ASR:', error);
+      throw error;
+    }
+  });
+
+  // 停止 ASR
+  ipcMain.handle('asr-stop', async () => {
+    try {
+      if (asrManager) {
+        await asrManager.stop();
+      }
+      return { success: true };
+    } catch (error) {
+      console.error('Error stopping ASR:', error);
+      throw error;
+    }
+  });
+
+  // 获取 ASR 配置
+  ipcMain.handle('asr-get-configs', () => {
+    try {
+      return db.getASRConfigs();
+    } catch (error) {
+      console.error('Error getting ASR configs:', error);
+      return [];
+    }
+  });
+
+  // 创建 ASR 配置
+  ipcMain.handle('asr-create-config', (event, configData) => {
+    try {
+      return db.createASRConfig(configData);
+    } catch (error) {
+      console.error('Error creating ASR config:', error);
+      throw error;
+    }
+  });
+
+  // 更新 ASR 配置
+  ipcMain.handle('asr-update-config', (event, id, updates) => {
+    try {
+      return db.updateASRConfig(id, updates);
+    } catch (error) {
+      console.error('Error updating ASR config:', error);
+      throw error;
+    }
+  });
+
+  // 设置默认 ASR 配置
+  ipcMain.handle('asr-set-default-config', (event, id) => {
+    try {
+      return db.setDefaultASRConfig(id);
+    } catch (error) {
+      console.error('Error setting default ASR config:', error);
+      throw error;
+    }
+  });
+
+  // 获取音频源配置
+  ipcMain.handle('asr-get-audio-sources', () => {
+    try {
+      return db.getAudioSources();
+    } catch (error) {
+      console.error('Error getting audio sources:', error);
+      return [];
+    }
+  });
+
+  // 创建音频源配置
+  ipcMain.handle('asr-create-audio-source', (event, sourceData) => {
+    try {
+      return db.createAudioSource(sourceData);
+    } catch (error) {
+      console.error('Error creating audio source:', error);
+      throw error;
+    }
+  });
+
+  // 更新音频源配置
+  ipcMain.handle('asr-update-audio-source', (event, id, updates) => {
+    try {
+      return db.updateAudioSource(id, updates);
+    } catch (error) {
+      console.error('Error updating audio source:', error);
+      throw error;
+    }
+  });
+
+  // 获取对话的语音识别记录
+  ipcMain.handle('asr-get-speech-records', (event, conversationId) => {
+    try {
+      return db.getSpeechRecordsByConversation(conversationId);
+    } catch (error) {
+      console.error('Error getting speech records:', error);
+      return [];
+    }
+  });
+
+  // 将语音识别记录转换为消息
+  ipcMain.handle('asr-convert-to-message', async (event, recordId, conversationId) => {
+    try {
+      if (!asrManager) {
+        asrManager = new ASRManager();
+      }
+      return await asrManager.convertRecordToMessage(recordId, conversationId);
+    } catch (error) {
+      console.error('Error converting record to message:', error);
+      throw error;
+    }
+  });
+
+  // 清理过期的音频文件
+  ipcMain.handle('asr-cleanup-audio-files', async (event, retentionDays) => {
+    try {
+      if (!asrManager) {
+        asrManager = new ASRManager();
+      }
+      return asrManager.cleanupExpiredAudioFiles(retentionDays);
+    } catch (error) {
+      console.error('Error cleaning up audio files:', error);
+      throw error;
+    }
+  });
+
+  console.log('ASR IPC handlers registered');
 }
 
 // 创建HUD窗口
 function createHUDWindow() {
   try {
-    const { screen } = require('electron');
     const primaryDisplay = screen.getPrimaryDisplay();
     const { width, height } = primaryDisplay.workAreaSize;
 
@@ -477,12 +711,19 @@ function createHUDWindow() {
       title: 'LiveGalGame HUD'
     });
 
-      // 初始化数据库
-      if (!db) {
-        db = new DatabaseManager();
-        // 不再自动初始化示例数据
+    // 初始化数据库
+    if (!db) {
+      db = new DatabaseManager();
+      // 不再自动初始化示例数据
+    }
+
+    // 自动授权媒体权限（麦克风）
+    hudWindow.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
+      if (permission === 'media') {
+        return callback(true);
       }
-  
+      callback(false);
+    });
 
     // 确保窗口可以调整大小（显式设置）
     hudWindow.setResizable(true);

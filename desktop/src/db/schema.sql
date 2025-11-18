@@ -116,3 +116,60 @@ CREATE INDEX IF NOT EXISTS idx_ai_analysis_conversation_id ON ai_analysis(conver
 CREATE INDEX IF NOT EXISTS idx_ai_suggestions_conversation_id ON ai_suggestions(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_character_details_character_id ON character_details(character_id);
 CREATE INDEX IF NOT EXISTS idx_llm_configs_is_default ON llm_configs(is_default);
+
+-- ==================== ASR（语音识别）相关表 ====================
+
+-- 音频源配置表（两个音源：speaker1, speaker2）
+CREATE TABLE IF NOT EXISTS audio_sources (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL, -- 音源名称（Speaker 1 / Speaker 2）
+  is_active INTEGER DEFAULT 0, -- 是否启用
+  device_id TEXT, -- 设备ID（系统音频设备标识）
+  device_name TEXT, -- 设备名称（显示用）
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+-- 语音识别记录表
+CREATE TABLE IF NOT EXISTS speech_recognition_records (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL, -- 关联的对话
+  source_id TEXT NOT NULL, -- 音频源ID
+  message_id TEXT, -- 关联的消息（识别完成后关联）
+  audio_data BLOB, -- 音频数据（可选，用于回放，如果 retain_audio_files=0 则为 NULL）
+  audio_file_path TEXT, -- 音频文件路径（如果 retain_audio_files=1）
+  audio_duration REAL, -- 音频时长（秒）
+  recognized_text TEXT, -- 识别结果
+  confidence REAL, -- 置信度
+  start_time INTEGER NOT NULL, -- 识别开始时间
+  end_time INTEGER, -- 识别结束时间
+  status TEXT NOT NULL, -- 状态：'recording', 'recognizing', 'completed', 'failed'
+  error_message TEXT, -- 错误信息
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+  FOREIGN KEY (source_id) REFERENCES audio_sources(id) ON DELETE CASCADE,
+  FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+);
+
+-- ASR 配置表
+CREATE TABLE IF NOT EXISTS asr_configs (
+  id TEXT PRIMARY KEY,
+  model_name TEXT NOT NULL, -- 模型名称（whisper-tiny/whisper-base 等）
+  language TEXT NOT NULL DEFAULT 'zh', -- 识别语言
+  enable_vad INTEGER DEFAULT 1, -- 是否启用 VAD
+  sentence_pause_threshold REAL DEFAULT 1.0, -- 分句停顿阈值（秒）
+  retain_audio_files INTEGER DEFAULT 0, -- 是否保留录音文件（0: 不保留，1: 保留）
+  audio_retention_days INTEGER DEFAULT 30, -- 录音文件保留天数
+  audio_storage_path TEXT, -- 录音文件存储路径（为空则使用默认路径）
+  is_default INTEGER DEFAULT 0, -- 是否为默认配置
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+-- 索引优化
+CREATE INDEX IF NOT EXISTS idx_speech_records_conversation_id ON speech_recognition_records(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_speech_records_source_id ON speech_recognition_records(source_id);
+CREATE INDEX IF NOT EXISTS idx_speech_records_status ON speech_recognition_records(status);
+CREATE INDEX IF NOT EXISTS idx_speech_records_created_at ON speech_recognition_records(created_at);
+CREATE INDEX IF NOT EXISTS idx_asr_configs_is_default ON asr_configs(is_default);

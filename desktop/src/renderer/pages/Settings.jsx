@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 
 function Settings() {
+  // LLM 配置
   const [llmConfigs, setLlmConfigs] = useState([]);
   const [defaultConfig, setDefaultConfig] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -13,6 +14,8 @@ function Settings() {
     baseUrl: '',
     isDefault: false
   });
+
+  // 音频设备设置
   const [audioDevices, setAudioDevices] = useState([]);
   const [selectedAudioDevice, setSelectedAudioDevice] = useState('');
   const [captureSystemAudio, setCaptureSystemAudio] = useState(false);
@@ -32,11 +35,157 @@ function Settings() {
   const systemDataArrayRef = useRef(null);
   const totalDataArrayRef = useRef(null);
   const animationIdRef = useRef(null);
+  
+  // 音频源配置（从数据库加载）
+  const [audioSources, setAudioSources] = useState([]);
+  const [speaker1Source, setSpeaker1Source] = useState(null); // 用户（麦克风）
+  const [speaker2Source, setSpeaker2Source] = useState(null); // 角色（系统音频）
+
+  // ASR（语音识别）配置
+  const [asrConfigs, setAsrConfigs] = useState([]);
+  const [asrDefaultConfig, setAsrDefaultConfig] = useState(null);
+  const [asrLoading, setAsrLoading] = useState(true);
+  const [showAddAsrConfig, setShowAddAsrConfig] = useState(false);
+  const [newAsrConfig, setNewAsrConfig] = useState({
+    model_name: 'whisper-base',
+    language: 'zh',
+    enable_vad: true,
+    sentence_pause_threshold: 1.0,
+    retain_audio_files: false,
+    audio_retention_days: 30,
+    audio_storage_path: ''
+  });;
 
   useEffect(() => {
     loadConfigs();
-    loadAudioDevices();
+    // 先加载音频源配置，再加载设备列表（因为设备列表需要用到音频源配置）
+    loadAudioSources().then(() => {
+      loadAudioDevices();
+    });
   }, []);
+
+  // 当音频源配置加载完成后，更新设备选择
+  useEffect(() => {
+    if (speaker1Source?.device_id && audioDevices.length > 0) {
+      const device = audioDevices.find(d => d.deviceId === speaker1Source.device_id);
+      if (device && selectedAudioDevice !== device.deviceId) {
+        setSelectedAudioDevice(device.deviceId);
+      }
+    }
+    if (speaker2Source?.device_id && audioDevices.length > 0 && captureSystemAudio) {
+      const device = audioDevices.find(d => d.deviceId === speaker2Source.device_id);
+      if (device && selectedSystemAudioDevice !== device.deviceId) {
+        setSelectedSystemAudioDevice(device.deviceId);
+      }
+    }
+  }, [speaker1Source, speaker2Source, audioDevices]);
+
+  // 当设备列表和音频源配置都加载完成后，如果已选择设备但未保存配置，自动保存
+  // 使用 ref 来跟踪是否已经尝试过自动保存，避免重复执行
+  const autoSaveAttemptedRef = useRef({ mic: false, system: false });
+
+  // 保存音频源配置（使用 useCallback 避免无限循环，但不依赖 audioSources）
+  const saveAudioSource = useCallback(async (sourceName, deviceId, deviceName, isActive = true) => {
+    try {
+      const api = window.electronAPI;
+      if (!api?.asrCreateAudioSource || !api?.asrUpdateAudioSource) {
+        console.warn('ASR API 不可用');
+        return;
+      }
+
+      console.log('保存音频源配置:', { sourceName, deviceId, deviceName, isActive });
+
+      // 重新获取最新的音频源列表，避免使用过期的 audioSources
+      const currentSources = await api.asrGetAudioSources();
+
+      // 查找是否已存在该音频源
+      const existingSource = currentSources.find(s =>
+        (sourceName === '用户（麦克风）' && (s.name === 'Speaker 1' || s.name === 'speaker1' || s.name === '用户' || s.name === '用户（麦克风）')) ||
+        (sourceName === '角色（系统音频）' && (s.name === 'Speaker 2' || s.name === 'speaker2' || s.name === '角色' || s.name === '角色（系统音频）'))
+      );
+
+      const updateData = {
+        name: sourceName,
+        device_id: deviceId,
+        device_name: deviceName,
+        is_active: isActive ? 1 : 0
+      };
+
+      if (existingSource) {
+        // 更新现有配置
+        console.log('更新现有音频源:', existingSource.id, updateData);
+        const result = await api.asrUpdateAudioSource(existingSource.id, updateData);
+        console.log('更新结果:', result);
+      } else {
+        // 创建新配置
+        console.log('创建新音频源:', updateData);
+        const result = await api.asrCreateAudioSource(updateData);
+        console.log('创建结果:', result);
+      }
+
+      // 重新加载音频源配置
+      await loadAudioSources();
+
+      // 验证保存结果
+      const updatedSources = await api.asrGetAudioSources();
+      const savedSource = updatedSources.find(s =>
+        (sourceName === '用户（麦克风）' && (s.name === 'Speaker 1' || s.name === 'speaker1' || s.name === '用户' || s.name === '用户（麦克风）')) ||
+        (sourceName === '角色（系统音频）' && (s.name === 'Speaker 2' || s.name === 'speaker2' || s.name === '角色' || s.name === '角色（系统音频）'))
+      );
+      console.log('保存后的音频源:', savedSource);
+
+      if (savedSource) {
+        console.log(`✓ 音频源配置已保存: ${sourceName}, is_active=${savedSource.is_active}`);
+      } else {
+        console.warn(`⚠ 音频源配置保存后未找到: ${sourceName}`);
+      }
+    } catch (error) {
+      console.error('保存音频源配置失败:', error);
+      alert('保存音频源配置失败：' + (error.message || '未知错误'));
+    }
+  }, []); // 移除 audioSources 依赖，改为在函数内部获取最新数据
+
+  useEffect(() => {
+    const autoSaveIfNeeded = async () => {
+      // 如果已选择麦克风设备，但没有保存配置，且还没有尝试过自动保存
+      if (selectedAudioDevice && audioDevices.length > 0 && !speaker1Source && !autoSaveAttemptedRef.current.mic) {
+        const device = audioDevices.find(d => d.deviceId === selectedAudioDevice);
+        if (device) {
+          autoSaveAttemptedRef.current.mic = true;
+          console.log('自动保存麦克风配置:', device.deviceId);
+          await saveAudioSource('用户（麦克风）', device.deviceId, device.label || device.deviceId, true);
+        }
+      }
+
+      // 如果已选择系统音频设备且已勾选，但没有保存配置，且还没有尝试过自动保存
+      if (captureSystemAudio && selectedSystemAudioDevice && audioDevices.length > 0 && !speaker2Source && !autoSaveAttemptedRef.current.system) {
+        const device = audioDevices.find(d => d.deviceId === selectedSystemAudioDevice);
+        if (device) {
+          autoSaveAttemptedRef.current.system = true;
+          console.log('自动保存系统音频配置:', device.deviceId);
+          await saveAudioSource('角色（系统音频）', device.deviceId, device.label || device.deviceId, true);
+        }
+      }
+    };
+
+    // 延迟执行，确保所有状态都已更新
+    if (audioDevices.length > 0 && (selectedAudioDevice || selectedSystemAudioDevice)) {
+      const timer = setTimeout(() => {
+        autoSaveIfNeeded();
+      }, 1000); // 增加延迟时间，确保状态稳定
+      return () => clearTimeout(timer);
+    }
+  }, [selectedAudioDevice, selectedSystemAudioDevice, audioDevices, speaker1Source, speaker2Source, captureSystemAudio]);
+  
+  // 当 speaker1Source 或 speaker2Source 更新时，重置自动保存标志
+  useEffect(() => {
+    if (speaker1Source) {
+      autoSaveAttemptedRef.current.mic = false;
+    }
+    if (speaker2Source) {
+      autoSaveAttemptedRef.current.system = false;
+    }
+  }, [speaker1Source, speaker2Source]);
 
   const loadAudioDevices = async () => {
     try {
@@ -49,11 +198,54 @@ function Settings() {
       const audioInputs = devices.filter(device => device.kind === 'audioinput');
       setAudioDevices(audioInputs);
 
-      if (audioInputs.length > 0 && !selectedAudioDevice) {
+      // 如果没有已保存的配置，选择第一个设备作为默认值
+      if (!speaker1Source && audioInputs.length > 0 && !selectedAudioDevice) {
         setSelectedAudioDevice(audioInputs[0].deviceId);
       }
     } catch (error) {
       console.error('加载音频设备失败:', error);
+    }
+  };
+
+  // 加载音频源配置
+  const loadAudioSources = async () => {
+    try {
+      const api = window.electronAPI;
+      if (!api?.asrGetAudioSources) {
+        console.warn('ASR API 不可用');
+        return;
+      }
+
+      const sources = await api.asrGetAudioSources();
+      setAudioSources(sources || []);
+
+      // 查找 Speaker 1（用户/麦克风）和 Speaker 2（角色/系统音频）
+      const speaker1 = sources.find(s =>
+        s.name === 'Speaker 1' ||
+        s.name === 'speaker1' ||
+        s.name === '用户' ||
+        s.name === '用户（麦克风）'
+      );
+      const speaker2 = sources.find(s =>
+        s.name === 'Speaker 2' ||
+        s.name === 'speaker2' ||
+        s.name === '角色' ||
+        s.name === '角色（系统音频）'
+      );
+
+      setSpeaker1Source(speaker1 || null);
+      setSpeaker2Source(speaker2 || null);
+
+      // 如果找到了配置，更新UI状态
+      if (speaker1) {
+        setSelectedAudioDevice(speaker1.device_id || '');
+      }
+      if (speaker2) {
+        setCaptureSystemAudio(true);
+        setSelectedSystemAudioDevice(speaker2.device_id || '');
+      }
+    } catch (error) {
+      console.error('加载音频源配置失败:', error);
     }
   };
 
@@ -514,11 +706,18 @@ function Settings() {
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-text-light dark:text-text-dark mb-2">
-                  麦克风设备
+                  用户（麦克风）设备 *
                 </label>
                 <select
                   value={selectedAudioDevice}
-                  onChange={(e) => setSelectedAudioDevice(e.target.value)}
+                  onChange={async (e) => {
+                    const deviceId = e.target.value;
+                    setSelectedAudioDevice(deviceId);
+                    const device = audioDevices.find(d => d.deviceId === deviceId);
+                    if (device) {
+                      await saveAudioSource('用户（麦克风）', deviceId, device.label || device.deviceId, true);
+                    }
+                  }}
                   className="w-full px-3 py-2 border border-border-light dark:border-border-dark rounded-lg bg-surface-light dark:bg-surface-dark text-text-light dark:text-text-dark focus:outline-none focus:ring-2 focus:ring-primary/50"
                 >
                   {audioDevices.map((device) => (
@@ -528,8 +727,13 @@ function Settings() {
                   ))}
                 </select>
                 <p className="text-xs text-text-muted-light dark:text-text-muted-dark mt-1">
-                  选择要使用的麦克风设备
+                  选择要使用的麦克风设备（用于识别用户说话）
                 </p>
+                {speaker1Source && (
+                  <p className="text-xs text-green-600 dark:text-green-400 mt-1">
+                    ✓ 已保存配置
+                  </p>
+                )}
               </div>
 
               <div className="flex items-center gap-3">
@@ -537,22 +741,48 @@ function Settings() {
                   type="checkbox"
                   id="systemAudio"
                   checked={captureSystemAudio}
-                  onChange={(e) => setCaptureSystemAudio(e.target.checked)}
+                  onChange={async (e) => {
+                    const checked = e.target.checked;
+                    setCaptureSystemAudio(checked);
+                    if (!checked) {
+                      // 如果取消选择，禁用音频源（但保留设备配置）
+                      if (speaker2Source && speaker2Source.device_id) {
+                        await saveAudioSource('角色（系统音频）', speaker2Source.device_id, speaker2Source.device_name, false);
+                      }
+                    } else {
+                      // 如果勾选，但还没有选择设备，提示用户选择设备
+                      if (!selectedSystemAudioDevice && audioDevices.length > 0) {
+                        setSelectedSystemAudioDevice(audioDevices[0].deviceId);
+                        const device = audioDevices[0];
+                        await saveAudioSource('角色（系统音频）', device.deviceId, device.label || device.deviceId, true);
+                      } else if (speaker2Source && speaker2Source.device_id) {
+                        // 如果之前有配置，恢复启用
+                        await saveAudioSource('角色（系统音频）', speaker2Source.device_id, speaker2Source.device_name, true);
+                      }
+                    }
+                  }}
                   className="w-4 h-4 text-primary border-border-light dark:border-border-dark rounded focus:ring-primary"
                 />
                 <label htmlFor="systemAudio" className="text-sm text-text-light dark:text-text-dark">
-                  同时捕获系统音频
+                  同时捕获系统音频（角色音频）*
                 </label>
               </div>
               {captureSystemAudio && (
                 <div className="space-y-3">
                   <div>
                     <label className="block text-sm font-medium text-text-light dark:text-text-dark mb-2">
-                      系统音频设备
+                      角色（系统音频）设备 *
                     </label>
                     <select
                       value={selectedSystemAudioDevice}
-                      onChange={(e) => setSelectedSystemAudioDevice(e.target.value)}
+                      onChange={async (e) => {
+                        const deviceId = e.target.value;
+                        setSelectedSystemAudioDevice(deviceId);
+                        const device = audioDevices.find(d => d.deviceId === deviceId);
+                        if (device) {
+                          await saveAudioSource('角色（系统音频）', deviceId, device.label || device.deviceId, true);
+                        }
+                      }}
                       className="w-full px-3 py-2 border border-border-light dark:border-border-dark rounded-lg bg-surface-light dark:bg-surface-dark text-text-light dark:text-text-dark focus:outline-none focus:ring-2 focus:ring-primary/50"
                     >
                       {audioDevices.map((device) => (
@@ -561,6 +791,14 @@ function Settings() {
                         </option>
                       ))}
                     </select>
+                    <p className="text-xs text-text-muted-light dark:text-text-muted-dark mt-1">
+                      选择虚拟音频设备（用于识别角色/游戏音频）
+                    </p>
+                    {speaker2Source && (
+                      <p className="text-xs text-green-600 dark:text-green-400 mt-1">
+                        ✓ 已保存配置
+                      </p>
+                    )}
                   </div>
 
                   <div className="text-xs text-yellow-600 dark:text-yellow-400 p-3 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg border border-yellow-200 dark:border-yellow-800">

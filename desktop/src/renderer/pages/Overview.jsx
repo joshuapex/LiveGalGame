@@ -194,14 +194,7 @@ function Overview() {
             </div>
           ) : conversations.length === 0 ? (
             <div className="col-span-full text-center py-12">
-              <p className="text-text-muted-light dark:text-text-muted-dark mb-4">还没有对话记录</p>
-              <Link
-                to="/conversations"
-                className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-full hover:opacity-90 transition-opacity"
-              >
-                <span className="material-symbols-outlined">add</span>
-                创建第一个对话
-              </Link>
+              <p className="text-text-muted-light dark:text-text-muted-dark">最近没有对话哦～</p>
             </div>
           ) : (
             <>
