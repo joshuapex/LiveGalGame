@@ -39,6 +39,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   createCharacter: (characterData) => ipcRenderer.invoke('db-create-character', characterData),
   getConversationsByCharacter: (characterId) => ipcRenderer.invoke('db-get-conversations-by-character', characterId),
   getMessagesByConversation: (conversationId) => ipcRenderer.invoke('db-get-messages-by-conversation', conversationId),
+  updateConversation: (conversationId, updates) => ipcRenderer.invoke('db-update-conversation', conversationId, updates),
   getStatistics: () => ipcRenderer.invoke('db-get-statistics'),
   getCharacterPageStatistics: () => ipcRenderer.invoke('db-get-character-page-statistics'),
   getRecentConversations: (limit) => ipcRenderer.invoke('db-get-recent-conversations', limit),

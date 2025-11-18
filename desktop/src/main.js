@@ -255,6 +255,16 @@ function setupIPC() {
     }
   });
 
+  // 更新对话
+  ipcMain.handle('db-update-conversation', (event, conversationId, updates) => {
+    try {
+      return db.updateConversation(conversationId, updates);
+    } catch (error) {
+      console.error('Error updating conversation:', error);
+      return null;
+    }
+  });
+
   // 获取统计数据
   ipcMain.handle('db-get-statistics', () => {
     try {

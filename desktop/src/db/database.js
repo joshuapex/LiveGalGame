@@ -197,6 +197,31 @@ class DatabaseManager {
     return stmt.get(id);
   }
 
+  // 更新对话
+  updateConversation(id, updates) {
+    const fields = [];
+    const values = { id };
+
+    for (const [key, value] of Object.entries(updates)) {
+      if (key !== 'id') {
+        fields.push(`${key} = @${key}`);
+        values[key] = value;
+      }
+    }
+
+    fields.push('updated_at = @updated_at');
+    values.updated_at = Date.now();
+
+    const stmt = this.db.prepare(`
+      UPDATE conversations
+      SET ${fields.join(', ')}
+      WHERE id = @id
+    `);
+
+    stmt.run(values);
+    return this.getConversationById(id);
+  }
+
   // ========== 消息相关方法 ==========
 
   // 创建消息
