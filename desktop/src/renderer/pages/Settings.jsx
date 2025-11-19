@@ -93,16 +93,16 @@ function Settings() {
         return;
       }
 
-      console.log('保存音频源配置:', { sourceName, deviceId, deviceName, isActive });
+      // 确定音频源的固定ID（关键：必须使用固定的ID才能与外键约束匹配）
+      const sourceId = sourceName === '用户（麦克风）' ? 'speaker1' : 'speaker2';
+
+      console.log('保存音频源配置:', { sourceId, sourceName, deviceId, deviceName, isActive });
 
       // 重新获取最新的音频源列表，避免使用过期的 audioSources
       const currentSources = await api.asrGetAudioSources();
 
-      // 查找是否已存在该音频源
-      const existingSource = currentSources.find(s =>
-        (sourceName === '用户（麦克风）' && (s.name === 'Speaker 1' || s.name === 'speaker1' || s.name === '用户' || s.name === '用户（麦克风）')) ||
-        (sourceName === '角色（系统音频）' && (s.name === 'Speaker 2' || s.name === 'speaker2' || s.name === '角色' || s.name === '角色（系统音频）'))
-      );
+      // 使用固定的ID查找是否已存在该音频源（而不是名称匹配）
+      const existingSource = currentSources.find(s => s.id === sourceId);
 
       const updateData = {
         name: sourceName,
@@ -117,27 +117,28 @@ function Settings() {
         const result = await api.asrUpdateAudioSource(existingSource.id, updateData);
         console.log('更新结果:', result);
       } else {
-        // 创建新配置
-        console.log('创建新音频源:', updateData);
-        const result = await api.asrCreateAudioSource(updateData);
+        // 创建新配置（必须指定固定的ID）
+        const createData = {
+          id: sourceId, // 关键：使用固定的ID
+          ...updateData
+        };
+        console.log('创建新音频源:', createData);
+        const result = await api.asrCreateAudioSource(createData);
         console.log('创建结果:', result);
       }
 
       // 重新加载音频源配置
       await loadAudioSources();
 
-      // 验证保存结果
+      // 验证保存结果（使用ID查找）
       const updatedSources = await api.asrGetAudioSources();
-      const savedSource = updatedSources.find(s =>
-        (sourceName === '用户（麦克风）' && (s.name === 'Speaker 1' || s.name === 'speaker1' || s.name === '用户' || s.name === '用户（麦克风）')) ||
-        (sourceName === '角色（系统音频）' && (s.name === 'Speaker 2' || s.name === 'speaker2' || s.name === '角色' || s.name === '角色（系统音频）'))
-      );
+      const savedSource = updatedSources.find(s => s.id === sourceId);
       console.log('保存后的音频源:', savedSource);
 
       if (savedSource) {
-        console.log(`✓ 音频源配置已保存: ${sourceName}, is_active=${savedSource.is_active}`);
+        console.log(`✓ 音频源配置已保存: ${sourceName} (ID: ${sourceId}), is_active=${savedSource.is_active}`);
       } else {
-        console.warn(`⚠ 音频源配置保存后未找到: ${sourceName}`);
+        console.warn(`⚠ 音频源配置保存后未找到: ${sourceName} (ID: ${sourceId})`);
       }
     } catch (error) {
       console.error('保存音频源配置失败:', error);
@@ -220,18 +221,9 @@ function Settings() {
       setAudioSources(sources || []);
 
       // 查找 Speaker 1（用户/麦克风）和 Speaker 2（角色/系统音频）
-      const speaker1 = sources.find(s =>
-        s.name === 'Speaker 1' ||
-        s.name === 'speaker1' ||
-        s.name === '用户' ||
-        s.name === '用户（麦克风）'
-      );
-      const speaker2 = sources.find(s =>
-        s.name === 'Speaker 2' ||
-        s.name === 'speaker2' ||
-        s.name === '角色' ||
-        s.name === '角色（系统音频）'
-      );
+      // 使用固定的ID查找（而不是名称匹配），确保与外键约束一致
+      const speaker1 = sources.find(s => s.id === 'speaker1');
+      const speaker2 = sources.find(s => s.id === 'speaker2');
 
       setSpeaker1Source(speaker1 || null);
       setSpeaker2Source(speaker2 || null);

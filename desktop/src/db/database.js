@@ -58,6 +58,9 @@ class DatabaseManager {
 
     // 初始化默认 ASR 配置（如果没有）
     this.seedDefaultASRConfig();
+    
+    // 初始化默认音频源（如果没有）
+    this.seedDefaultAudioSources();
   }
 
   // 关闭数据库连接
@@ -1564,6 +1567,34 @@ class DatabaseManager {
 
   // 保存语音识别记录
   saveSpeechRecord(recordData) {
+    // 验证外键约束：检查对话是否存在
+    if (recordData.conversation_id) {
+      const conversation = this.getConversationById(recordData.conversation_id);
+      if (!conversation) {
+        throw new Error(`Conversation not found: ${recordData.conversation_id}. Cannot save speech record.`);
+      }
+    } else {
+      throw new Error('conversation_id is required for speech record');
+    }
+
+    // 验证外键约束：检查音频源是否存在，如果不存在则自动创建
+    let audioSource = this.getAudioSourceById(recordData.source_id);
+    if (!audioSource) {
+      console.warn(`Audio source not found: ${recordData.source_id}, creating it automatically...`);
+      // 自动创建音频源
+      audioSource = this.createAudioSource({
+        id: recordData.source_id,
+        name: recordData.source_id === 'speaker1' ? 'Speaker 1' : recordData.source_id === 'speaker2' ? 'Speaker 2' : `Audio Source ${recordData.source_id}`,
+        is_active: 1,
+        device_id: null,
+        device_name: null
+      });
+      console.log(`Auto-created audio source: ${recordData.source_id}`);
+    }
+
+    // 生成或使用提供的ID
+    const recordId = recordData.id || this.generateId();
+
     const stmt = this.db.prepare(`
       INSERT INTO speech_recognition_records (
         id, conversation_id, source_id, message_id,
@@ -1580,7 +1611,7 @@ class DatabaseManager {
     `);
 
     const info = stmt.run({
-      id: recordData.id || this.generateId(),
+      id: recordId,
       conversation_id: recordData.conversation_id,
       source_id: recordData.source_id,
       message_id: recordData.message_id || null,
@@ -1597,7 +1628,7 @@ class DatabaseManager {
       updated_at: Date.now()
     });
 
-    return this.getSpeechRecordById(recordData.id || info.lastInsertRowid);
+    return this.getSpeechRecordById(recordId);
   }
 
   // 获取语音识别记录
@@ -1742,6 +1773,44 @@ class DatabaseManager {
       }
     } catch (error) {
       console.error('Error seeding default ASR config:', error);
+      return null;
+    }
+  }
+
+  // 初始化默认音频源
+  seedDefaultAudioSources() {
+    try {
+      // 检查并创建 speaker1
+      let speaker1 = this.getAudioSourceById('speaker1');
+      if (!speaker1) {
+        console.log('Creating default audio source: speaker1');
+        speaker1 = this.createAudioSource({
+          id: 'speaker1',
+          name: 'Speaker 1',
+          is_active: 1,
+          device_id: null,
+          device_name: null
+        });
+        console.log('Default audio source speaker1 created:', speaker1);
+      }
+
+      // 检查并创建 speaker2
+      let speaker2 = this.getAudioSourceById('speaker2');
+      if (!speaker2) {
+        console.log('Creating default audio source: speaker2');
+        speaker2 = this.createAudioSource({
+          id: 'speaker2',
+          name: 'Speaker 2',
+          is_active: 0,
+          device_id: null,
+          device_name: null
+        });
+        console.log('Default audio source speaker2 created:', speaker2);
+      }
+
+      return { speaker1, speaker2 };
+    } catch (error) {
+      console.error('Error seeding default audio sources:', error);
       return null;
     }
   }

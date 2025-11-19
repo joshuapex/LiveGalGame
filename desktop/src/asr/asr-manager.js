@@ -24,6 +24,10 @@ class ASRManager {
     // 活跃识别任务
     this.activeTranscriptions = new Map(); // sourceId -> Promise
 
+    // 识别结果去重缓存（避免重复保存相同的识别结果）
+    this.recentRecognitionCache = new Map(); // sourceId -> [{ text, timestamp }]
+    this.duplicateThreshold = 3000; // 3秒内的相同文本视为重复
+
     logger.log('ASRManager created');
   }
 
@@ -120,9 +124,26 @@ class ASRManager {
       const float32Array = new Float32Array(audioBuffer);
       const result = await this.whisperService.addAudioChunk(float32Array, timestamp);
 
-      // 如果识别到完整句子，保存到数据库并返回结果
+      // 如果识别到完整句子，检查是否重复后再保存
       if (result && result.text) {
+        // 检查是否是重复的识别结果
+        if (this.isDuplicateRecognition(sourceId, result.text, result.endTime)) {
+          logger.log(`跳过重复的识别结果: "${result.text}" (${sourceId})`);
+          return null;
+        }
+
+        // 检查文本是否有效（过滤掉空文本、纯标点、过短文本）
+        const trimmedText = result.text.trim();
+        if (!trimmedText || trimmedText.length < 2 || /^[，。！？、；：\s]+$/.test(trimmedText)) {
+          logger.log(`跳过无效的识别结果: "${trimmedText}" (${sourceId})`);
+          return null;
+        }
+
         const record = await this.saveRecognitionRecord(sourceId, result);
+        
+        // 添加到去重缓存
+        this.addToRecognitionCache(sourceId, trimmedText, result.endTime);
+        
         return {
           ...result,
           recordId: record.id,
@@ -145,6 +166,11 @@ class ASRManager {
    */
   async saveRecognitionRecord(sourceId, result) {
     try {
+      // 检查对话ID是否存在
+      if (!this.currentConversationId) {
+        throw new Error('No conversation ID set. Cannot save speech record.');
+      }
+
       // 保存音频文件（如果需要）
       let audioFilePath = null;
       if (result.audioData && this.whisperService.retainAudioFiles) {
@@ -175,6 +201,10 @@ class ASRManager {
       return record;
     } catch (error) {
       logger.error('Error saving recognition record:', error);
+      // 如果是外键约束错误，提供更友好的错误信息
+      if (error.message && error.message.includes('Conversation not found')) {
+        throw new Error(`对话不存在（ID: ${this.currentConversationId}），无法保存语音识别记录。请确保已创建对话后再开始语音识别。`);
+      }
       throw error;
     }
   }
@@ -289,6 +319,48 @@ class ASRManager {
       logger.error('Error cleaning up expired audio files:', error);
       return 0;
     }
+  }
+
+  /**
+   * 检查是否是重复的识别结果
+   * @param {string} sourceId - 音频源ID
+   * @param {string} text - 识别文本
+   * @param {number} timestamp - 时间戳
+   * @returns {boolean} 是否是重复
+   */
+  isDuplicateRecognition(sourceId, text, timestamp) {
+    const cache = this.recentRecognitionCache.get(sourceId) || [];
+    const trimmedText = text.trim().toLowerCase();
+    
+    // 检查最近几秒内是否有相同的文本
+    const recentThreshold = timestamp - this.duplicateThreshold;
+    for (const item of cache) {
+      if (item.timestamp >= recentThreshold && item.text.toLowerCase() === trimmedText) {
+        return true;
+      }
+    }
+    
+    return false;
+  }
+
+  /**
+   * 添加到识别结果缓存
+   * @param {string} sourceId - 音频源ID
+   * @param {string} text - 识别文本
+   * @param {number} timestamp - 时间戳
+   */
+  addToRecognitionCache(sourceId, text, timestamp) {
+    if (!this.recentRecognitionCache.has(sourceId)) {
+      this.recentRecognitionCache.set(sourceId, []);
+    }
+    
+    const cache = this.recentRecognitionCache.get(sourceId);
+    cache.push({ text: text.trim(), timestamp });
+    
+    // 清理过期的缓存（保留最近10秒）
+    const cutoffTime = timestamp - 10000;
+    const filtered = cache.filter(item => item.timestamp > cutoffTime);
+    this.recentRecognitionCache.set(sourceId, filtered);
   }
 
   /**

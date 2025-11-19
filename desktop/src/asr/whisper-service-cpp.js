@@ -193,6 +193,14 @@ class WhisperService {
         this.currentSentence.isRecognizing = true;
         const result = await this.transcribeSentence(sentenceAudio, sentenceBoundary);
 
+        // 更新最后语音结束时间（用于检测停顿）
+        if (result && result.text && result.text.trim().length > 0) {
+          this.lastSpeechEndTime = result.endTime || timestamp;
+        } else {
+          // 如果没有识别到有效文本，也更新时间（避免重复识别静音）
+          this.lastSpeechEndTime = timestamp;
+        }
+
         // 重置当前句子
         this.currentSentence = {
           startTime: timestamp,
@@ -215,6 +223,25 @@ class WhisperService {
   }
 
   /**
+   * 计算音频能量（RMS）
+   * @param {Float32Array} audioData - 音频数据
+   * @returns {number} 音频能量值（0-1）
+   */
+  calculateAudioEnergy(audioData) {
+    if (!audioData || audioData.length === 0) {
+      return 0;
+    }
+    
+    let sum = 0;
+    for (let i = 0; i < audioData.length; i++) {
+      sum += audioData[i] * audioData[i];
+    }
+    
+    const rms = Math.sqrt(sum / audioData.length);
+    return rms;
+  }
+
+  /**
    * 检查句子边界（是否应该分句）
    * @param {number} timestamp - 当前时间戳
    * @returns {Object} 分句结果
@@ -222,8 +249,18 @@ class WhisperService {
   checkSentenceBoundary(timestamp) {
     const pauseThreshold = 1000; // 停顿阈值：1 秒
     const maxSentenceLength = 20000; // 最大句子长度：20 秒
+    const minAudioEnergy = 0.01; // 最小音频能量阈值（低于此值认为是静音）
 
     const currentSentenceDuration = timestamp - this.currentSentence.startTime;
+
+    // 检查当前句子音频是否有足够的能量（避免识别静音）
+    if (this.currentSentence.audioData.length > 0) {
+      const audioEnergy = this.calculateAudioEnergy(new Float32Array(this.currentSentence.audioData));
+      if (audioEnergy < minAudioEnergy && currentSentenceDuration < 2000) {
+        // 音频能量太低且持续时间短，可能是静音，不进行识别
+        return { shouldSplit: false };
+      }
+    }
 
     // 1. 检查是否超过最大句子长度
     if (currentSentenceDuration >= maxSentenceLength) {
@@ -236,9 +273,25 @@ class WhisperService {
       };
     }
 
-    // 2. 检查停顿时间
+    // 2. 检查停顿时间（只有在有足够音频数据时才分句）
     const timeSinceLastSpeech = timestamp - this.lastSpeechEndTime;
     if (timeSinceLastSpeech >= pauseThreshold && currentSentenceDuration > 500) {
+      // 检查音频能量，如果太低可能是静音，不进行识别
+      if (this.currentSentence.audioData.length > 0) {
+        const audioEnergy = this.calculateAudioEnergy(new Float32Array(this.currentSentence.audioData));
+        if (audioEnergy < minAudioEnergy) {
+          // 音频能量太低，可能是静音，重置句子但不识别
+          this.currentSentence = {
+            startTime: timestamp,
+            audioData: [],
+            text: '',
+            isRecognizing: false
+          };
+          this.lastSpeechEndTime = timestamp;
+          return { shouldSplit: false };
+        }
+      }
+      
       return {
         shouldSplit: true,
         startIndex: 0,
@@ -472,5 +525,6 @@ class WhisperService {
 }
 
 export default WhisperService;
+
 
 

@@ -33,3 +33,4 @@ whisper.cpp 使用 GGML 格式的模型，比 transformers.js 的模型更小：
 3. 创建新的 whisper-service.js 使用 whisper.cpp API
 
 
+
