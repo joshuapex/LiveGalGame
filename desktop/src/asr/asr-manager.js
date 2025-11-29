@@ -37,6 +37,10 @@ class ASRManager {
     this.MIN_SENTENCE_LENGTH = 6; // 最短落地字符数，避免噪音片段
     this.isSpeaking = false;
 
+    // 【当前分段会话】追踪每个 sourceId 的当前消息（UPSERT 机制）
+    // 解决 WhisperLiveKit 发送累积结果导致重复 INSERT 的问题
+    this.currentSegments = new Map(); // sourceId -> { messageId, recordId, lastText }
+
     logger.log('ASRManager created');
   }
 
@@ -251,6 +255,9 @@ class ASRManager {
         this.silenceTimers.delete(sourceId);
       }
 
+      // 【斩断当前分段】静音意味着当前这句话结束，下一条是新消息
+      this.commitCurrentSegment(sourceId);
+
       // 检查服务是否支持 forceCommitSentence
       if (typeof this.whisperService.forceCommitSentence === 'function') {
         logger.log(`[Silence Timeout] Triggering force commit for ${sourceId}`);
@@ -261,6 +268,28 @@ class ASRManager {
       }
     } catch (error) {
       logger.error('Error in triggerSilenceCommit:', error);
+    }
+  }
+
+  /**
+   * 【斩断当前分段】将 currentMessageId 重置为 null
+   * 表示"这句话彻底结束了，下一条是新消息"
+   * @param {string} sourceId - 音频源 ID
+   */
+  commitCurrentSegment(sourceId) {
+    const currentSegment = this.currentSegments.get(sourceId);
+    if (currentSegment) {
+      logger.log(`[Commit Segment] Committing segment for ${sourceId}, message: ${currentSegment.messageId}`);
+      this.currentSegments.delete(sourceId);
+    }
+  }
+
+  /**
+   * 【斩断所有分段】停止识别或切换对话时调用
+   */
+  commitAllSegments() {
+    for (const sourceId of this.currentSegments.keys()) {
+      this.commitCurrentSegment(sourceId);
     }
   }
 
@@ -473,6 +502,10 @@ class ASRManager {
         // 如果对话ID变化，更新它并清理上下文
         if (conversationId && conversationId !== this.currentConversationId) {
           logger.log(`Conversation changed from ${this.currentConversationId} to ${conversationId}, clearing context`);
+          
+          // 【斩断所有分段】切换对话前提交所有进行中的分段
+          this.commitAllSegments();
+          
           this.currentConversationId = conversationId;
 
           // 【自动上下文学习】切换对话时清理旧上下文
@@ -524,6 +557,9 @@ class ASRManager {
 
       // 清除静音定时器
       this.clearAllSilenceTimers();
+
+      // 【斩断所有分段】停止时提交所有进行中的分段
+      this.commitAllSegments();
 
       logger.log('ASR stopped');
     } catch (error) {
@@ -655,20 +691,29 @@ class ASRManager {
 
   /**
    * 【混合分句】处理句子完成事件（由 Python 端触发）
+   * 使用 UPSERT 机制：同一分段内更新现有消息，而不是创建新消息
    * @param {Object} result - 句子完成结果
    */
   async handleSentenceComplete(result) {
     try {
-      const { sessionId, text, timestamp, trigger, audioDuration } = result;
+      const { sessionId, text, timestamp, trigger, audioDuration, isSegmentEnd } = result;
+
+      // 【斩断信号】如果收到段落结束信号（如 ready_to_stop），先斩断当前分段
+      if (isSegmentEnd) {
+        logger.log(`[Sentence Complete] Segment end signal received for ${sessionId}`);
+        // 如果没有文本，只是纯粹的斩断信号
+        if (!text) {
+          this.commitCurrentSegment(sessionId);
+          return null;
+        }
+      }
 
       if (!text || text.length < this.MIN_SENTENCE_LENGTH) {
         logger.log(`[Sentence Complete] Text too short, skipping: "${text}" (min: ${this.MIN_SENTENCE_LENGTH})`);
-        return null;
-      }
-
-      // 检查是否是重复的识别结果
-      if (this.isDuplicateRecognition(sessionId, text, timestamp)) {
-        logger.log(`[Sentence Complete] Duplicate, skipping: "${text.substring(0, 30)}..."`);
+        // 如果是段落结束信号，仍然需要斩断
+        if (isSegmentEnd) {
+          this.commitCurrentSegment(sessionId);
+        }
         return null;
       }
 
@@ -679,9 +724,62 @@ class ASRManager {
         return null;
       }
 
-      logger.log(`[Sentence Complete] Saving: "${normalizedText.substring(0, 50)}..." (trigger: ${trigger}, session: ${sessionId})`);
+      // 获取当前分段状态
+      const currentSegment = this.currentSegments.get(sessionId);
 
-      // 保存识别记录
+      // 【UPSERT 逻辑】检查是否已有进行中的消息
+      if (currentSegment && currentSegment.messageId) {
+        // 检查文本是否有实质性变化（避免无意义的 UPDATE）
+        if (currentSegment.lastText === normalizedText) {
+          logger.log(`[Sentence Complete] Text unchanged, skipping update: "${normalizedText.substring(0, 30)}..."`);
+          return null;
+        }
+
+        logger.log(`[Sentence Complete] Updating existing message ${currentSegment.messageId}: "${normalizedText.substring(0, 50)}..." (trigger: ${trigger})`);
+
+        // UPDATE 现有记录
+        const updatedRecord = this.db.updateSpeechRecord(currentSegment.recordId, {
+          recognized_text: normalizedText,
+          end_time: timestamp,
+          audio_duration: audioDuration || (timestamp - (currentSegment.startTime || timestamp)) / 1000
+        });
+
+        if (!updatedRecord) {
+          logger.error(`[Sentence Complete] Failed to update speech record: ${currentSegment.recordId}`);
+          return null;
+        }
+
+        // UPDATE 消息内容
+        const updatedMessage = this.db.updateMessage(currentSegment.messageId, {
+          content: normalizedText
+        });
+
+        if (!updatedMessage) {
+          logger.error(`[Sentence Complete] Failed to update message: ${currentSegment.messageId}`);
+          return null;
+        }
+
+        // 更新分段状态
+        currentSegment.lastText = normalizedText;
+        this.currentSegments.set(sessionId, currentSegment);
+
+        // 发送更新事件给渲染进程（使用 update 类型）
+        if (this.eventEmitter) {
+          this.eventEmitter('asr-sentence-update', updatedMessage);
+        }
+
+        return updatedMessage;
+      }
+
+      // 检查是否是重复的识别结果（仅对新消息检查）
+      if (this.isDuplicateRecognition(sessionId, normalizedText, timestamp)) {
+        logger.log(`[Sentence Complete] Duplicate, skipping: "${normalizedText.substring(0, 30)}..."`);
+        return null;
+      }
+
+      logger.log(`[Sentence Complete] Creating new message: "${normalizedText.substring(0, 50)}..." (trigger: ${trigger}, session: ${sessionId})`);
+
+      // INSERT 新记录
       const record = await this.saveRecognitionRecord(sessionId, {
         text: normalizedText,
         confidence: trigger === 'punctuation' ? 0.98 : 0.95,
@@ -704,6 +802,14 @@ class ASRManager {
       const message = await this.convertRecordToMessage(record.id, this.currentConversationId);
       logger.log(`[Sentence Complete] Message created: ${message.id}`);
 
+      // 【保存当前分段状态】后续更新将 UPDATE 这条消息
+      this.currentSegments.set(sessionId, {
+        messageId: message.id,
+        recordId: record.id,
+        lastText: normalizedText,
+        startTime: timestamp - (audioDuration || this.SILENCE_TIMEOUT)
+      });
+
       // 发送事件给渲染进程（实时更新UI）
       if (this.eventEmitter) {
         logger.log(`[Sentence Complete] Sending event to renderer: ${message.id}`);
@@ -717,6 +823,12 @@ class ASRManager {
       if (pendingTimer) {
         clearTimeout(pendingTimer);
         this.silenceTimers.delete(sessionId);
+      }
+
+      // 【斩断】如果是段落结束信号，在保存消息后斩断
+      if (isSegmentEnd) {
+        logger.log(`[Sentence Complete] Committing segment after creating message: ${sessionId}`);
+        this.commitCurrentSegment(sessionId);
       }
 
       return message;

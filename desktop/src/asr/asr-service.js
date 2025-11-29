@@ -1,12 +1,14 @@
 import path from 'path';
 import fs from 'fs';
 import http from 'http';
+import os from 'os';
 import { spawn } from 'child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import WebSocket from 'ws';
 import { app } from 'electron';
 import killPort from 'kill-port';
 import * as logger from '../utils/logger.js';
+import { getAsrModelPreset } from '../shared/asr-models.js';
 
 const DEFAULT_WLK_HOST = '127.0.0.1';
 const DEFAULT_WLK_PORT = Number(process.env.WHISPERLIVEKIT_PORT || 18765);
@@ -14,6 +16,36 @@ const PCM_SAMPLE_RATE = 16000;
 const MAX_LINE_HISTORY = 200;
 const DEFAULT_SILENCE_THRESHOLD_SECONDS = Number(process.env.WHISPERLIVEKIT_SILENCE_THRESHOLD || 0.6);
 const DEFAULT_MAX_SENTENCE_CHARS = Number(process.env.WHISPERLIVEKIT_MAX_SENTENCE_CHARS || 50);
+
+function getAppModelCacheDir() {
+  try {
+    return path.join(app.getPath('userData'), 'hf-home', 'hub');
+  } catch {
+    return null;
+  }
+}
+
+function getModelCacheCandidates() {
+  const homeDir = os.homedir();
+  const appCacheDir = getAppModelCacheDir();
+  const candidates = [
+    process.env.ASR_CACHE_DIR,
+    process.env.HF_HOME ? path.join(process.env.HF_HOME, 'hub') : null,
+    appCacheDir,
+    homeDir ? path.join(homeDir, '.cache', 'huggingface', 'hub') : null,
+    homeDir ? path.join(homeDir, '.cache', 'modelscope', 'hub') : null,
+  ];
+  return [...new Set(candidates.filter(Boolean))];
+}
+
+function ensureDirectoryExists(dir) {
+  if (!dir) return;
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch {
+    // ignore failures
+  }
+}
 
 // 句子级标点和启发式配置（主要面向中文）
 const SENTENCE_END_PUNCTUATION = new Set('。！？!?；;');
@@ -232,8 +264,11 @@ class WhisperLiveKitSession {
     this.sentLineIds = new Set();
     this.lineOrder = [];
     this.lastPartialText = '';
-    // 记录已经“确认”的原始字符数，用于与 buffer_transcription 对齐
+    // 记录已经"确认"的原始字符数，用于与 buffer_transcription 对齐
     this.rawCommittedChars = 0;
+    // 【修复累积问题】追踪每个 line.start 对应的已处理文本长度
+    // 用于检测是否是同一个 line 的更新（累积结果）
+    this.processedLineStarts = new Map(); // start -> { endTime, textLength }
     this.connect();
   }
 
@@ -308,7 +343,7 @@ class WhisperLiveKitSession {
     if (payload.type === 'ready_to_stop') {
       const flushedSentences = this.segmenter.flush();
       const timestamp = Date.now();
-      flushedSentences.forEach((sentence) => {
+      flushedSentences.forEach((sentence, index) => {
         if (!sentence || !sentence.text) return;
         this.rawCommittedChars += sentence.rawLength || 0;
         if (this.onSentence) {
@@ -319,9 +354,21 @@ class WhisperLiveKitSession {
             trigger: 'whisperlivekit',
             audioDuration: null,
             language: payload.detected_language || null,
+            // 最后一条 flush 的句子标记为段落结束，触发斩断
+            isSegmentEnd: index === flushedSentences.length - 1,
           });
         }
       });
+      // 即使没有 flush 出句子，也要通知斩断（会话结束）
+      if (flushedSentences.length === 0 && this.onSentence) {
+        this.onSentence({
+          sessionId: this.sourceId,
+          text: null,
+          timestamp,
+          trigger: 'ready_to_stop',
+          isSegmentEnd: true,
+        });
+      }
       return;
     }
 
@@ -338,6 +385,72 @@ class WhisperLiveKitSession {
         if (!text) {
           return;
         }
+
+        const startSeconds = parseClockToSeconds(line.start);
+        const endSeconds = parseClockToSeconds(line.end);
+        const duration = Math.max(0, endSeconds - startSeconds);
+
+        // 【修复累积问题】检测是否是同一个 line 的更新
+        // WhisperLiveKit 发送的是累积结果，同一个 start 的 line 会不断更新
+        const processedInfo = this.processedLineStarts.get(line.start);
+        if (processedInfo) {
+          // 如果已经处理过这个 start，检查文本是否有新增
+          const prevTextLength = processedInfo.textLength;
+          if (text.length <= prevTextLength) {
+            // 文本没有新增，跳过（可能是重复或回退）
+            return;
+          }
+          // 文本有新增，只处理增量部分
+          const incrementalText = text.slice(prevTextLength);
+          if (!incrementalText.trim()) {
+            return;
+          }
+          // 更新记录
+          this.processedLineStarts.set(line.start, {
+            endTime: endSeconds,
+            textLength: text.length,
+          });
+          // 创建增量 line 对象
+          const incrementalLine = {
+            start: line.start,
+            end: line.end,
+            text: incrementalText,
+            detected_language: line.detected_language,
+          };
+          // 处理增量
+          const sentences = this.segmenter.processLine(incrementalLine);
+          sentences.forEach((sentence, index) => {
+            if (!sentence || !sentence.text) return;
+            this.rawCommittedChars += sentence.rawLength || 0;
+            if (this.onSentence) {
+              const isSegmentEnd = index < sentences.length - 1;
+              this.onSentence({
+                sessionId: this.sourceId,
+                text: sentence.text,
+                timestamp,
+                trigger: 'whisperlivekit',
+                audioDuration: duration,
+                language: line.detected_language || null,
+                isSegmentEnd,
+              });
+            }
+          });
+          return;
+        }
+
+        // 新的 start，正常处理
+        this.processedLineStarts.set(line.start, {
+          endTime: endSeconds,
+          textLength: text.length,
+        });
+
+        // 清理过期的 start 记录（保留最近的）
+        if (this.processedLineStarts.size > MAX_LINE_HISTORY) {
+          const oldestStart = this.processedLineStarts.keys().next().value;
+          this.processedLineStarts.delete(oldestStart);
+        }
+
+        // 旧的 lineId 去重逻辑仍然保留，作为额外的安全网
         const lineId = `${line.start}-${line.end}-${text}`;
         if (this.sentLineIds.has(lineId)) {
           return;
@@ -349,17 +462,16 @@ class WhisperLiveKitSession {
           this.sentLineIds.delete(oldest);
         }
 
-        const startSeconds = parseClockToSeconds(line.start);
-        const endSeconds = parseClockToSeconds(line.end);
-        const duration = Math.max(0, endSeconds - startSeconds);
-
         // 将行文本送入分句器，按句子粒度输出
         const sentences = this.segmenter.processLine(line);
-        sentences.forEach((sentence) => {
+        sentences.forEach((sentence, index) => {
           if (!sentence || !sentence.text) return;
-          // 记录在原始文本中已经“确认”的字符数，用于后续 partial 去重
+          // 记录在原始文本中已经"确认"的字符数，用于后续 partial 去重
           this.rawCommittedChars += sentence.rawLength || 0;
           if (this.onSentence) {
+            // 如果分句器输出了多个句子，前面的句子标记为段落结束（基于静音间隔的断句）
+            // 只有最后一个句子继续保持"进行中"状态
+            const isSegmentEnd = index < sentences.length - 1;
             this.onSentence({
               sessionId: this.sourceId,
               text: sentence.text,
@@ -367,6 +479,7 @@ class WhisperLiveKitSession {
               trigger: 'whisperlivekit',
               audioDuration: duration,
               language: line.detected_language || null,
+              isSegmentEnd,
             });
           }
         });
@@ -405,6 +518,8 @@ class WhisperLiveKitSession {
     this.lineOrder = [];
     this.segmenter.reset();
     this.rawCommittedChars = 0;
+    // 【修复累积问题】清理 line start 追踪
+    this.processedLineStarts.clear();
   }
 
   close() {
@@ -440,6 +555,34 @@ class ASRService {
     }
 
     logger.log(`[WhisperLiveKit] Python path detected: ${this.pythonPath}`);
+  }
+
+  resolveModelCacheDir(modelName) {
+    const candidates = getModelCacheCandidates();
+    const preset = getAsrModelPreset(modelName);
+    const repoId = preset?.repoId || (typeof modelName === 'string' && modelName.includes('/') ? modelName : null);
+    const repoSafe = repoId ? `models--${repoId.replace(/\//g, '--')}` : null;
+    const msRepoId = preset?.modelScopeRepoId;
+
+    for (const candidate of candidates) {
+      if (!candidate) continue;
+      try {
+        if (repoSafe && fs.existsSync(path.join(candidate, repoSafe))) {
+          ensureDirectoryExists(candidate);
+          return candidate;
+        }
+        if (msRepoId && fs.existsSync(path.join(candidate, msRepoId))) {
+          ensureDirectoryExists(candidate);
+          return candidate;
+        }
+      } catch {
+        // 忽略探测过程中出现的问题，继续尝试下一个目录
+      }
+    }
+
+    const fallback = candidates[0] || getAppModelCacheDir() || path.join(os.homedir(), '.cache', 'huggingface', 'hub');
+    ensureDirectoryExists(fallback);
+    return fallback;
   }
 
   /**
@@ -509,10 +652,12 @@ class ASRService {
   async preloadModel() {
     try {
       logger.log(`[WhisperLiveKit] Preloading ${this.modelName} model...`);
-      // 使用faster-whisper直接加载模型来预热缓存
+      // 使用faster-whisper直接加载模型来预热缓存，指定 download_root 确保使用正确的缓存目录
+      const modelCacheDir = this.resolveModelCacheDir(this.modelName);
+
       await this.runPythonCommand([
         '-c',
-        `from faster_whisper import WhisperModel; print("Loading ${this.modelName} model..."); model = WhisperModel('${this.modelName}', device='cpu', compute_type='int8'); print("${this.modelName} model loaded successfully")`
+        `from faster_whisper import WhisperModel; print("Loading ${this.modelName} model from ${modelCacheDir}..."); model = WhisperModel('${this.modelName}', device='cpu', compute_type='int8', download_root='${modelCacheDir}'); print("${this.modelName} model loaded successfully")`
       ]);
       logger.log(`[WhisperLiveKit] ${this.modelName} model preloaded successfully`);
       return true;
@@ -567,11 +712,15 @@ class ASRService {
     // 等待一小段时间确保端口完全释放
     await delay(500);
 
+    const modelCacheDir = this.resolveModelCacheDir(this.modelName);
+
     const args = [
       '-m',
       'whisperlivekit.basic_server',
       '--model',
       this.modelName,
+      '--model_cache_dir',
+      modelCacheDir,
       '--language',
       this.language,
       '--host',

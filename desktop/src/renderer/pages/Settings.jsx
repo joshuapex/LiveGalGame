@@ -289,12 +289,12 @@ function Settings() {
       if (window.electronAPI?.checkMediaAccessStatus) {
         const micStatus = await window.electronAPI.checkMediaAccessStatus('microphone');
         console.log('[Settings] 麦克风权限状态:', micStatus);
-        
+
         if (micStatus.status !== 'granted') {
           setAudioStatus('正在请求麦克风权限...');
           const result = await window.electronAPI.requestMediaAccess('microphone');
           console.log('[Settings] 麦克风权限请求结果:', result);
-          
+
           if (!result.granted) {
             throw new Error(result.message || '麦克风权限被拒绝，请在系统设置中允许');
           }
@@ -352,10 +352,10 @@ function Settings() {
 
         // 为系统音频创建独立的 AudioContext
         await new Promise(resolve => setTimeout(resolve, 500));
-        
+
         const sysAudioContextOptions = { sampleRate: 48000, latencyHint: 'playback' };
         systemAudioContextRef.current = new (window.AudioContext || window.webkitAudioContext)(sysAudioContextOptions);
-        
+
         attachAudioContextDebugHandlers(systemAudioContextRef.current, 'system');
 
         const systemAnalyser = systemAudioContextRef.current.createAnalyser();
@@ -418,12 +418,12 @@ function Settings() {
           }
         } catch (systemError) {
           console.error('[Settings] ❌ 系统音频捕获失败:', systemError);
-          
+
           // 确保禁用 loopback
           if (window.electronAPI?.disableLoopbackAudio) {
-            await window.electronAPI.disableLoopbackAudio().catch(() => {});
+            await window.electronAPI.disableLoopbackAudio().catch(() => { });
           }
-          
+
           const errorMsg = systemError.message || '未知错误';
           if (micStreamObtained) {
             console.warn(`[Settings] 麦克风将继续工作，但无法捕获系统音频`);
@@ -445,11 +445,11 @@ function Settings() {
       const capturedSources = [];
       if (micStreamObtained) capturedSources.push('麦克风');
       if (systemAudioRef.current) capturedSources.push('系统音频');
-      
-      const statusMsg = capturedSources.length > 0 
+
+      const statusMsg = capturedSources.length > 0
         ? `正在监听 (${capturedSources.join(' + ')})...`
         : '监听中...';
-      
+
       setAudioStatus(statusMsg);
       setIsListening(true);
 
@@ -462,7 +462,7 @@ function Settings() {
       console.error('错误名称:', error.name);
       console.error('错误消息:', error.message);
       console.error('错误堆栈:', error.stack);
-      
+
       // 针对常见错误提供更友好的提示
       let errorMsg = error.message;
       if (error.name === 'NotFoundError') {
@@ -472,10 +472,10 @@ function Settings() {
       } else if (error.name === 'NotReadableError') {
         errorMsg = '无法读取音频设备。设备可能被其他应用占用。';
       }
-      
+
       setAudioStatus(`启动失败: ${errorMsg}`);
       setIsListening(false);
-      
+
       // 清理可能部分创建的资源
       await stopListening();
     }
@@ -558,7 +558,7 @@ function Settings() {
     // 检查是否至少有一个 AudioContext 在运行
     const micContextActive = micAudioContextRef.current && micAudioContextRef.current.state !== 'closed';
     const systemContextActive = systemAudioContextRef.current && systemAudioContextRef.current.state !== 'closed';
-    
+
     if (!micContextActive && !systemContextActive) {
       return;
     }
@@ -924,8 +924,9 @@ function Settings() {
                   选择要使用的麦克风设备（用于识别用户说话）
                 </p>
                 {speaker1Source && (
-                  <p className="text-xs text-green-600 dark:text-green-400 mt-1">
-                    ✓ 已保存配置
+                  <p className="text-xs text-green-600 dark:text-green-400 mt-1 flex items-center gap-1">
+                    <span className="material-symbols-outlined text-xs">check_circle</span>
+                    已保存配置
                   </p>
                 )}
               </div>
@@ -992,7 +993,7 @@ function Settings() {
                         onClick={stopListening}
                         className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors flex items-center gap-2"
                       >
-                        <span className="animate-pulse">⏹</span>
+                        <span className="material-symbols-outlined animate-pulse">stop_circle</span>
                         停止监听
                       </button>
                     )}
@@ -1000,11 +1001,18 @@ function Settings() {
 
                   {isListening && (
                     <div className="space-y-3">
-                      <div className={`text-sm font-medium ${audioStatus.includes('✅') ? 'text-green-600 dark:text-green-400' :
-                        audioStatus.includes('⚠️') || audioStatus.includes('❌') ? 'text-red-600 dark:text-red-400' :
+                      <div className={`text-sm font-medium flex items-center gap-2 ${audioStatus.includes('✅') || audioStatus.includes('成功') ? 'text-green-600 dark:text-green-400' :
+                        audioStatus.includes('⚠️') || audioStatus.includes('❌') || audioStatus.includes('失败') || audioStatus.includes('错误') ? 'text-red-600 dark:text-red-400' :
                           'text-text-muted-light dark:text-text-muted-dark'
                         }`}>
-                        {audioStatus}
+                        {audioStatus.includes('✅') || audioStatus.includes('成功') ? (
+                          <span className="material-symbols-outlined text-sm">check_circle</span>
+                        ) : audioStatus.includes('⚠️') || audioStatus.includes('❌') || audioStatus.includes('失败') || audioStatus.includes('错误') ? (
+                          <span className="material-symbols-outlined text-sm">error</span>
+                        ) : (
+                          <span className="material-symbols-outlined text-sm">mic</span>
+                        )}
+                        {audioStatus.replace(/[✅⚠️❌]/g, '').trim()}
                       </div>
 
                       {desktopCapturerError && (

@@ -67,6 +67,7 @@ function ASRSettings() {
   const [modelsError, setModelsError] = useState('');
   const [activeModelId, setActiveModelId] = useState(null);
   const [savingModelId, setSavingModelId] = useState(null);
+  const [downloadSource, setDownloadSource] = useState('huggingface');
 
   // 表单数据
   const [formData, setFormData] = useState({
@@ -218,7 +219,7 @@ function ASRSettings() {
       if (!api?.asrDownloadModel) {
         throw new Error('下载接口不可用');
       }
-      await api.asrDownloadModel(modelId);
+      await api.asrDownloadModel(modelId, downloadSource);
     } catch (err) {
       console.error('下载模型失败：', err);
       alert('下载模型失败：' + (err.message || '未知错误'));
@@ -412,9 +413,8 @@ function ASRSettings() {
     return (
       <div
         key={preset.id}
-        className={`rounded-2xl border bg-white p-5 shadow-sm transition-all ${
-          isActive ? 'border-blue-500 ring-2 ring-blue-100' : 'border-gray-200'
-        }`}
+        className={`rounded-2xl border bg-white p-5 shadow-sm transition-all ${isActive ? 'border-blue-500 ring-2 ring-blue-100' : 'border-gray-200'
+          }`}
       >
         <div className="flex items-start justify-between gap-4">
           <div>
@@ -437,13 +437,7 @@ function ASRSettings() {
         <div className="mt-4 text-sm">
           {isDownloaded ? (
             <div className="flex items-center text-green-600">
-              <svg className="mr-2 h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                <path
-                  fillRule="evenodd"
-                  d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-10.707a1 1 0 00-1.414-1.414L9 9.586 7.707 8.293a1 1 0 10-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
-                  clipRule="evenodd"
-                />
-              </svg>
+              <span className="material-symbols-outlined mr-1 text-sm">check_circle</span>
               <span>
                 本地可用{updatedAt ? ` · 更新于 ${updatedAt}` : ''}
               </span>
@@ -477,11 +471,10 @@ function ASRSettings() {
             <button
               onClick={() => handleSetActiveModel(preset.id)}
               disabled={isActive || savingModelId === preset.id}
-              className={`rounded-lg px-4 py-2 text-sm font-medium ${
-                isActive
+              className={`rounded-lg px-4 py-2 text-sm font-medium ${isActive
                   ? 'bg-gray-100 text-gray-500 cursor-not-allowed'
                   : 'bg-blue-600 text-white hover:bg-blue-700'
-              } transition-colors`}
+                } transition-colors`}
             >
               {isActive ? '当前已启用' : savingModelId === preset.id ? '应用中...' : '设为当前模型'}
             </button>
@@ -529,9 +522,10 @@ function ASRSettings() {
           </div>
           <Link
             to="/settings"
-            className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+            className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors flex items-center gap-2"
           >
-            ← 返回设置
+            <span className="material-symbols-outlined text-sm">arrow_back</span>
+            返回设置
           </Link>
         </div>
       </div>
@@ -545,12 +539,33 @@ function ASRSettings() {
               选择适合设备性能的模型，查看本地缓存状态，并监控下载速度
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-4">
+            <div className="flex items-center bg-gray-100 rounded-lg p-1">
+              <button
+                onClick={() => setDownloadSource('huggingface')}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${downloadSource === 'huggingface'
+                    ? 'bg-white text-blue-600 shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900'
+                  }`}
+              >
+                HuggingFace
+              </button>
+              <button
+                onClick={() => setDownloadSource('modelscope')}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${downloadSource === 'modelscope'
+                    ? 'bg-white text-blue-600 shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900'
+                  }`}
+              >
+                ModelScope (国内推荐)
+              </button>
+            </div>
             <button
               onClick={loadModelData}
-              className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 flex items-center gap-2"
             >
-              🔄 刷新模型状态
+              <span className="material-symbols-outlined text-sm">refresh</span>
+              刷新状态
             </button>
           </div>
         </div>
@@ -614,7 +629,8 @@ function ASRSettings() {
             onClick={() => setShowAddConfig(true)}
             className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
           >
-            + 添加配置
+            <span className="material-symbols-outlined text-sm">add</span>
+            添加配置
           </button>
         </div>
 
