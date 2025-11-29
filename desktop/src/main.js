@@ -572,9 +572,9 @@ function setupIPC() {
     }
   });
 
-  ipcMain.handle('asr-download-model', (event, modelId) => {
+  ipcMain.handle('asr-download-model', (event, modelId, source) => {
     try {
-      return modelManager.startDownload(modelId);
+      return modelManager.startDownload(modelId, source);
     } catch (error) {
       console.error('Error starting ASR model download:', error);
       throw error;
@@ -891,7 +891,7 @@ function setupIPC() {
   console.log('Desktop Capturer IPC handler registered');
 
   // ========== 媒体权限 API (macOS) ==========
-  
+
   // 检查媒体访问权限状态
   ipcMain.handle('check-media-access-status', async (event, mediaType) => {
     try {
@@ -917,27 +917,27 @@ function setupIPC() {
         // 先检查当前状态
         const currentStatus = systemPreferences.getMediaAccessStatus(mediaType);
         console.log(`[Permission] Current ${mediaType} status: ${currentStatus}`);
-        
+
         if (currentStatus === 'granted') {
           return { granted: true, status: 'granted' };
         }
-        
+
         if (currentStatus === 'denied') {
           // 如果已被拒绝，无法再次请求，用户需要手动在系统偏好设置中开启
-          return { 
-            granted: false, 
+          return {
+            granted: false,
             status: 'denied',
             message: '权限已被拒绝，请在系统偏好设置 > 安全性与隐私 > 隐私 中手动开启'
           };
         }
-        
+
         // 请求权限
         console.log(`[Permission] Requesting ${mediaType} access...`);
         const granted = await systemPreferences.askForMediaAccess(mediaType);
         console.log(`[Permission] ${mediaType} access ${granted ? 'granted' : 'denied'}`);
         return { granted, status: granted ? 'granted' : 'denied' };
       }
-      
+
       // Windows/Linux 不需要显式请求
       return { granted: true, status: 'granted', platform: process.platform };
     } catch (error) {
@@ -1113,19 +1113,19 @@ function registerGlobalShortcuts() {
 app.whenReady().then(async () => {
   ensureAsrCacheEnv();
   setupIPC(); // 确保IPC监听器只注册一次
-  
+
   // macOS: 应用启动时请求麦克风权限
   if (process.platform === 'darwin') {
     try {
       const micStatus = systemPreferences.getMediaAccessStatus('microphone');
       console.log(`[Permission] Initial microphone status: ${micStatus}`);
-      
+
       if (micStatus !== 'granted') {
         console.log('[Permission] Requesting microphone access on startup...');
         const granted = await systemPreferences.askForMediaAccess('microphone');
         console.log(`[Permission] Microphone access ${granted ? 'granted' : 'denied'}`);
       }
-      
+
       // 检查屏幕录制权限状态（用于系统音频捕获）
       const screenStatus = systemPreferences.getMediaAccessStatus('screen');
       console.log(`[Permission] Screen capture status: ${screenStatus}`);
@@ -1136,7 +1136,7 @@ app.whenReady().then(async () => {
       console.error('[Permission] Error requesting permissions:', err);
     }
   }
-  
+
   createWindow();
   // createHUDWindow(); // 暂时不自动创建HUD，等待用户触发
   registerGlobalShortcuts();

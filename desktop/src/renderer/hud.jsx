@@ -504,7 +504,7 @@ function Hud() {
     const api = window.electronAPI;
     if (!api?.on || !sessionInfo?.conversationId) return;
 
-    // 监听完整句子识别结果
+    // 监听完整句子识别结果（新消息）
     const handleSentenceComplete = (message) => {
       try {
         if (!message) return;
@@ -532,6 +532,21 @@ function Hud() {
       }
     };
 
+    // 监听消息更新事件（更新现有消息内容）
+    const handleSentenceUpdate = (updatedMessage) => {
+      try {
+        if (!updatedMessage || !updatedMessage.id) return;
+
+        setMessages(prev => prev.map(msg => 
+          msg.id === updatedMessage.id 
+            ? { ...msg, content: updatedMessage.content }
+            : msg
+        ));
+      } catch (error) {
+        console.error('Error handling ASR update:', error);
+      }
+    };
+
     // 监听 ASR 错误
     const handleError = (error) => {
       console.error('ASR error:', error);
@@ -540,11 +555,13 @@ function Hud() {
 
     // 注册监听器
     api.on('asr-sentence-complete', handleSentenceComplete);
+    api.on('asr-sentence-update', handleSentenceUpdate);
     api.on('asr-error', handleError);
 
     return () => {
       // 清理监听器
       api.removeListener('asr-sentence-complete', handleSentenceComplete);
+      api.removeListener('asr-sentence-update', handleSentenceUpdate);
       api.removeListener('asr-error', handleError);
     };
   }, [sessionInfo]);

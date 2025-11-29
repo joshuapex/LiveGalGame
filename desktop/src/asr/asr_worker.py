@@ -282,6 +282,27 @@ def decode_audio_chunk(audio_b64: str) -> np.ndarray:
     return audio_int16.astype(np.float32) / 32768.0
 
 
+def generate_chinese_dialogue_prompt(completed_sentences: List[str]) -> str:
+    """
+    生成固定的简体中文闲聊风格对话 Prompt，引导 Whisper 正确添加标点符号
+
+    使用固定的中文对话模板，包含丰富的标点和闲聊风格表达
+    """
+    # 固定的中文对话模板，包含丰富的标点和闲聊风格
+    fixed_prompt = """你好啊，今天怎么样？天气不错吧？
+嗯嗯，我觉得还可以啦。最近在忙什么呢？
+哈哈，原来是这样啊。那你有什么计划吗？
+哦，听起来挺有趣的！需要我帮忙吗？
+好的，没问题。我觉得这个主意不错。
+真的吗？那太好了！继续保持吧。
+哎呀，怎么会这样呢？有什么我能做的吗？
+嗯，我明白你的意思。生活有时候就是这样。
+哈哈，说得对！我们一起想想办法吧。
+好吧，那就这样决定啦。保持联系哦。"""
+
+    return fixed_prompt
+
+
 def extract_incremental_text(previous: str, current: str) -> str:
     """提取增量文本（当前文本相对于之前文本的新增部分）"""
     if not current:
@@ -479,15 +500,11 @@ def handle_streaming_chunk(
     sys.stderr.write(f"[Worker] Starting transcription: session={session_id}, samples={len(audio_array)}, duration={audio_duration:.2f}s\n")
     sys.stderr.flush()
 
-    # 【核心优化】构造 initial_prompt
-    # 取最近的一句已完成句子作为 prompt
-    initial_prompt = None
-    if state.completed_sentences:
-        initial_prompt = state.completed_sentences[-1]
-        # 限制 prompt 长度，避免过长
-        if len(initial_prompt) > 200:
-            initial_prompt = initial_prompt[-200:]
-        sys.stderr.write(f"[Worker] Using initial_prompt: \"{initial_prompt}\"\n")
+    # 【核心优化】构造智能中文对话 Prompt
+    # 使用简体中文闲聊风格，包含标点符号引导
+    initial_prompt = generate_chinese_dialogue_prompt(state.completed_sentences)
+    sys.stderr.write(f"[Worker] Generated Chinese dialogue prompt: \"{initial_prompt[:100]}...\"\n")
+    sys.stderr.write(f"[Worker] Prompt length: {len(initial_prompt)} chars\n")
 
     try:
         full_text, segments, info = transcribe_audio_with_segments(model, audio_array, initial_prompt=initial_prompt)

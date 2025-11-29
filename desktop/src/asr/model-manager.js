@@ -30,14 +30,16 @@ function directorySize(targetPath) {
     for (const entry of entries) {
       const fullPath = path.join(current, entry.name);
       try {
-        if (entry.isDirectory()) {
+        const stat = fs.statSync(fullPath);
+        if (stat.isDirectory()) {
           stack.push(fullPath);
-        } else if (entry.isFile()) {
-          const stat = fs.statSync(fullPath);
+          continue;
+        }
+        if (stat.isFile()) {
           total += stat.size;
         }
       } catch {
-        // Ignore files that disappear mid-scan
+        // Ignore files or links that disappear mid-scan
       }
     }
   }
@@ -47,9 +49,28 @@ function directorySize(targetPath) {
 export default class ASRModelManager extends EventEmitter {
   constructor() {
     super();
+    // Primary cache directory (app-specific or configured)
     this.cacheDir = process.env.ASR_CACHE_DIR
       || (process.env.HF_HOME ? path.join(process.env.HF_HOME, 'hub') : path.join(app.getPath('userData'), 'hf-home', 'hub'));
     fs.mkdirSync(this.cacheDir, { recursive: true });
+
+    // Also check system default HuggingFace cache (where faster-whisper actually downloads models)
+    this.systemHfCache = path.join(os.homedir(), '.cache', 'huggingface', 'hub');
+    // And system default ModelScope cache
+    this.systemMsCache = path.join(os.homedir(), '.cache', 'modelscope', 'hub');
+
+    // List of cache directories to check (in priority order)
+    this.cacheDirs = [
+      this.cacheDir,           // App-configured cache
+      this.systemHfCache,      // System default HF cache
+      this.systemMsCache       // System default ModelScope cache
+    ].filter(dir => {
+      try {
+        return fs.existsSync(dir);
+      } catch {
+        return false;
+      }
+    });
 
     this.pythonPath = this.detectPythonPath();
     this.activeDownloads = new Map(); // modelId -> download context
@@ -86,44 +107,72 @@ export default class ASRModelManager extends EventEmitter {
   }
 
   findSnapshotDir(preset) {
-    const repoSafe = `models--${preset.repoId.replace('/', '--')}`;
-    const repoRoot = path.join(this.cacheDir, repoSafe);
-    if (!fs.existsSync(repoRoot)) {
-      return null;
-    }
-    const refsDir = path.join(repoRoot, 'refs');
-    let snapshotSha = null;
-    const preferredRefs = ['main', 'default', 'refs/head/main'];
-    for (const refName of preferredRefs) {
-      const refPath = path.join(refsDir, refName);
-      if (fs.existsSync(refPath)) {
-        try {
-          snapshotSha = fs.readFileSync(refPath, 'utf-8').trim();
-          if (snapshotSha) break;
-        } catch {
-          // ignore
+    // Try all cache directories
+    console.log(`[ASR ModelManager] Searching for model ${preset.id} in dirs:`, this.cacheDirs);
+    for (const cacheDir of this.cacheDirs) {
+      const repoSafe = `models--${preset.repoId.replace('/', '--')}`;
+      const repoRoot = path.join(cacheDir, repoSafe);
+      console.log(`[ASR ModelManager] Checking HF path: ${repoRoot}`);
+
+      if (!fs.existsSync(repoRoot)) {
+        console.log(`[ASR ModelManager] Path does not exist: ${repoRoot}`);
+        continue;
+      }
+
+      const refsDir = path.join(repoRoot, 'refs');
+      let snapshotSha = null;
+      const preferredRefs = ['main', 'default', 'refs/head/main'];
+      for (const refName of preferredRefs) {
+        const refPath = path.join(refsDir, refName);
+        if (fs.existsSync(refPath)) {
+          try {
+            snapshotSha = fs.readFileSync(refPath, 'utf-8').trim();
+            if (snapshotSha) {
+              console.log(`[ASR ModelManager] Found SHA from ref ${refName}: ${snapshotSha}`);
+              break;
+            }
+          } catch {
+            // ignore
+          }
         }
       }
-    }
-    const snapshotsDir = path.join(repoRoot, 'snapshots');
-    if (!snapshotSha) {
-      const snapshots = safeReaddir(snapshotsDir).filter((entry) => entry.isDirectory());
-      snapshots.sort((a, b) => {
+
+      const snapshotsDir = path.join(repoRoot, 'snapshots');
+      if (!snapshotSha) {
+        console.log(`[ASR ModelManager] No SHA from refs, checking snapshots dir: ${snapshotsDir}`);
         try {
-          const aStat = fs.statSync(path.join(snapshotsDir, a.name));
-          const bStat = fs.statSync(path.join(snapshotsDir, b.name));
-          return bStat.mtimeMs - aStat.mtimeMs;
-        } catch {
-          return 0;
+          if (fs.existsSync(snapshotsDir)) {
+            const snapshots = safeReaddir(snapshotsDir).filter((entry) => entry.isDirectory());
+            snapshots.sort((a, b) => {
+              try {
+                const aStat = fs.statSync(path.join(snapshotsDir, a.name));
+                const bStat = fs.statSync(path.join(snapshotsDir, b.name));
+                return bStat.mtimeMs - aStat.mtimeMs;
+              } catch {
+                return 0;
+              }
+            });
+            snapshotSha = snapshots.length > 0 ? snapshots[0].name : null;
+            console.log(`[ASR ModelManager] Found latest snapshot from dir listing: ${snapshotSha}`);
+          }
+        } catch (e) {
+          console.error(`[ASR ModelManager] Error listing snapshots: ${e.message}`);
         }
-      });
-      snapshotSha = snapshots.length > 0 ? snapshots[0].name : null;
+      }
+
+      if (!snapshotSha) {
+        continue;
+      }
+
+      const snapshotPath = path.join(snapshotsDir, snapshotSha);
+      if (fs.existsSync(snapshotPath)) {
+        console.log(`[ASR ModelManager] Found valid snapshot path: ${snapshotPath}`);
+        return snapshotPath;
+      } else {
+        console.log(`[ASR ModelManager] Snapshot path does not exist: ${snapshotPath}`);
+      }
     }
-    if (!snapshotSha) {
-      return null;
-    }
-    const snapshotPath = path.join(snapshotsDir, snapshotSha);
-    return fs.existsSync(snapshotPath) ? snapshotPath : null;
+    return null;
   }
 
   getModelStatus(modelId) {
@@ -131,31 +180,91 @@ export default class ASRModelManager extends EventEmitter {
     if (!preset) {
       return null;
     }
-    const snapshotPath = this.findSnapshotDir(preset);
-    let downloadedBytes = 0;
-    let updatedAt = null;
-    if (snapshotPath) {
-      downloadedBytes = directorySize(snapshotPath);
+
+    // Check HuggingFace cache
+    const hfSnapshotPath = this.findSnapshotDir(preset);
+    let hfDownloadedBytes = 0;
+    let hfUpdatedAt = null;
+    if (hfSnapshotPath) {
+      hfDownloadedBytes = directorySize(hfSnapshotPath);
       try {
-        const stat = fs.statSync(snapshotPath);
-        updatedAt = stat.mtimeMs;
+        const stat = fs.statSync(hfSnapshotPath);
+        hfUpdatedAt = stat.mtimeMs;
       } catch {
-        updatedAt = null;
+        hfUpdatedAt = null;
       }
     }
+
+    // Check ModelScope cache
+    // ModelScope structure: cacheDir / repoId (e.g. gpustack/faster-whisper-medium)
+    // or sometimes cacheDir / repoId / .mv / ...
+    // Simple check: cacheDir / repoId
+    let msSnapshotPath = null;
+    let msDownloadedBytes = 0;
+    let msUpdatedAt = null;
+
+    if (preset.modelScopeRepoId) {
+      // Try all cache directories for ModelScope models
+      for (const cacheDir of this.cacheDirs) {
+        const msRepoPath = path.join(cacheDir, preset.modelScopeRepoId);
+        if (fs.existsSync(msRepoPath)) {
+          // Check if it looks like a valid model directory (has config.json or model.bin)
+          if (fs.existsSync(path.join(msRepoPath, 'config.json')) || fs.existsSync(path.join(msRepoPath, 'model.bin'))) {
+            msSnapshotPath = msRepoPath;
+            msDownloadedBytes = directorySize(msSnapshotPath);
+            try {
+              const stat = fs.statSync(msSnapshotPath);
+              msUpdatedAt = stat.mtimeMs;
+            } catch {
+              msUpdatedAt = null;
+            }
+            break; // Found it, stop searching
+          }
+        }
+      }
+    }
+
+    // Determine which one to use (prefer the one that is "more" downloaded or exists)
+    const snapshotPath = hfSnapshotPath || msSnapshotPath;
+    const downloadedBytes = Math.max(hfDownloadedBytes, msDownloadedBytes);
+    const updatedAt = hfUpdatedAt || msUpdatedAt;
+    const source = hfSnapshotPath ? 'huggingface' : (msSnapshotPath ? 'modelscope' : null);
+
     const targetSize = preset.sizeBytes || 0;
-    const isDownloaded = targetSize
-      ? downloadedBytes >= targetSize * 0.98
-      : downloadedBytes > 0;
+
+    // Relaxed check: if we have > 10MB and (model.bin or config.json exists), consider it downloaded
+    // or if size is > 90% of target
+    const hasCriticalFiles = snapshotPath && (
+      fs.existsSync(path.join(snapshotPath, 'config.json')) ||
+      fs.existsSync(path.join(snapshotPath, 'model.bin'))
+    );
+
+    const isDownloaded = (targetSize > 0 && downloadedBytes >= targetSize * 0.9) ||
+      (hasCriticalFiles && downloadedBytes > 10 * 1024 * 1024);
+
+    if (modelId === 'medium' || modelId === 'small') {
+      console.log(`[ASR ModelManager] Status for ${modelId}:`, {
+        hfSnapshotPath,
+        msSnapshotPath,
+        downloadedBytes,
+        targetSize,
+        hasCriticalFiles,
+        isDownloaded,
+        source
+      });
+    }
+
     return {
       modelId,
       repoId: preset.repoId,
+      modelScopeRepoId: preset.modelScopeRepoId,
       sizeBytes: targetSize,
       downloadedBytes,
       isDownloaded,
       snapshotPath,
       updatedAt,
       activeDownload: this.activeDownloads.has(modelId),
+      source
     };
   }
 
@@ -163,11 +272,12 @@ export default class ASRModelManager extends EventEmitter {
     try {
       return ASR_MODEL_PRESETS.map((preset) => this.getModelStatus(preset.id));
     } catch (error) {
+      console.error('[ASR ModelManager] Error getting all model statuses:', error);
       return [];
     }
   }
 
-  startDownload(modelId) {
+  startDownload(modelId, source = 'huggingface') {
     if (this.activeDownloads.has(modelId)) {
       return { status: 'running' };
     }
@@ -179,18 +289,30 @@ export default class ASRModelManager extends EventEmitter {
     if (!pythonExecutable) {
       throw new Error('Python executable not found');
     }
+
+    const repoId = source === 'modelscope' && preset.modelScopeRepoId ? preset.modelScopeRepoId : preset.repoId;
+
+    console.log(`[ASR ModelManager] Starting download: modelId=${modelId}, source=${source}, repoId=${repoId}`);
+    console.log(`[ASR ModelManager] Python path: ${pythonExecutable}`);
+    console.log(`[ASR ModelManager] Download script: ${DOWNLOAD_SCRIPT}`);
+
     const jobs = Math.max(2, Math.min(8, Math.floor((os.cpus()?.length || 4) / 2)) || 2);
     const args = [
       DOWNLOAD_SCRIPT,
       '--model-id',
       preset.id,
       '--repo-id',
-      preset.repoId,
+      repoId,
       '--cache-dir',
       this.cacheDir,
       '--jobs',
       String(jobs),
+      '--source',
+      source
     ];
+
+    console.log(`[ASR ModelManager] Spawn command: ${pythonExecutable} ${args.join(' ')}`);
+
     const env = {
       ...process.env,
       ASR_CACHE_DIR: this.cacheDir,
@@ -199,7 +321,8 @@ export default class ASRModelManager extends EventEmitter {
     const child = spawn(pythonExecutable, args, { env });
     const downloadCtx = {
       modelId,
-      repoId: preset.repoId,
+      repoId: repoId,
+      source,
       child,
       totalBytes: preset.sizeBytes || null,
       snapshotPath: null,
@@ -210,39 +333,50 @@ export default class ASRModelManager extends EventEmitter {
     this.activeDownloads.set(modelId, downloadCtx);
     this.broadcast('asr-model-download-started', {
       modelId,
-      repoId: preset.repoId,
+      repoId: repoId,
+      source
     });
+
+    console.log(`[ASR ModelManager] Download started for ${modelId}`);
+
     let stdoutBuffer = '';
     child.stdout.on('data', (chunk) => {
       stdoutBuffer += chunk.toString();
       const lines = stdoutBuffer.split('\n');
       stdoutBuffer = lines.pop() || '';
-      lines.forEach((line) => this.handleScriptMessage(downloadCtx, line));
+      lines.forEach((line) => {
+        console.log(`[ASR ModelManager][${modelId}][stdout] ${line}`);
+        this.handleScriptMessage(downloadCtx, line);
+      });
     });
     child.stderr.on('data', (chunk) => {
       const message = chunk.toString();
+      console.error(`[ASR ModelManager][${modelId}][stderr] ${message}`);
       this.broadcast('asr-model-download-log', {
         modelId,
-        repoId: preset.repoId,
+        repoId: repoId,
         message,
       });
     });
     const finalize = (code, signal) => {
+      console.log(`[ASR ModelManager] Download process exited: modelId=${modelId}, code=${code}, signal=${signal}`);
       if (downloadCtx.timer) {
         clearInterval(downloadCtx.timer);
       }
       this.activeDownloads.delete(modelId);
       const status = this.getModelStatus(modelId);
       if (code === 0) {
+        console.log(`[ASR ModelManager] Download completed successfully: ${modelId}`);
         this.broadcast('asr-model-download-complete', {
           modelId,
-          repoId: preset.repoId,
+          repoId: repoId,
           status,
         });
       } else {
+        console.error(`[ASR ModelManager] Download failed: modelId=${modelId}, code=${code}`);
         this.broadcast('asr-model-download-error', {
           modelId,
-          repoId: preset.repoId,
+          repoId: repoId,
           code,
           signal,
         });
@@ -250,9 +384,10 @@ export default class ASRModelManager extends EventEmitter {
     };
     child.on('close', (code, signal) => finalize(code, signal));
     child.on('error', (error) => {
+      console.error(`[ASR ModelManager] Download process error: ${error.message}`);
       this.broadcast('asr-model-download-error', {
         modelId,
-        repoId: preset.repoId,
+        repoId: repoId,
         message: error.message,
       });
       finalize(1, null);
