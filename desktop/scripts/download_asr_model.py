@@ -190,3 +190,4 @@ def download_from_modelscope(args):
 
 if __name__ == "__main__":
     main()
+

@@ -1,164 +1,128 @@
 # LiveGalGame Desktop
 
-LiveGalGame Desktop 是基于 Electron 的跨平台桌面应用（Windows/macOS），旨在为用户提供实时的对话辅助与复盘学习体验。它通过浮动 HUD 叠加在任意聊天应用之上，提供实时语音转录、AI 建议与即时反馈。
+> 🖥️ Windows / macOS 桌面端 —— 让语音聊天也能像 GalGame 一样有字幕和选项
 
-## 系统要求
+[← 返回主页](../README.md)
 
-### macOS
-- macOS 12 (Monterey) 或更高版本
-- Xcode Command Line Tools (运行 `xcode-select --install` 安装)
-- Node.js 20+
-- pnpm 8+
+---
 
-### Windows
-- Windows 10/11
-- Visual Studio Build Tools (包含 "Desktop development with C++" 工作负载)
-- Node.js 20+
-- pnpm 8+
-- Python 3.x (用于 node-gyp 构建)
+## 这是什么？
 
-## 快速开始
+一个浮动在你聊天软件上方的智能助手窗口。它能：
 
-### 1. 获取代码
+- **实时显示字幕** —— 你说的话、对方说的话，全部转成文字
+- **给出 AI 回复建议** —— 关键时刻告诉你该说什么
+- **显示好感度变化** —— 让聊天效果可视化
+
+半透明、置顶、可拖动，不干扰你正常使用任何聊天软件。
+
+---
+
+## 🎮 使用流程
+
+### 1️⃣ 创建对话对象
+点击"新建对话"，填写：
+- 对方昵称
+- 你们的关系
+- 备注信息（比如对方的喜好）
+
+> 💡 这些信息会帮助 AI 更懂你的场景
+
+### 2️⃣ 启动浮动窗口
+点击"开始对话"，一个小窗会出现在屏幕上：
+- 半透明设计，不遮挡聊天界面
+- 可以拖动到任意位置
+- 始终置顶显示
+
+### 3️⃣ 开始聊天
+打开你的聊天软件（微信、QQ、Discord...），开始语音对话：
+- 你说的话会实时转成文字显示
+- 对方说的话也会被识别并显示
+- 再也不用担心听漏或忘记
+
+### 4️⃣ 获取 AI 建议
+当对方问你问题或对话到了关键时刻：
+- AI 会自动弹出回复建议
+- 每个选项都带有情感标签（温柔/幽默/直接...）
+- 还会预测这样说的效果
+
+### 5️⃣ 看到反馈
+选择一个回复说出来后：
+- 好感度进度条会动态变化
+- 比如：`❤️ 好感度: 50 → 70 (+20 ↗)`
+- 把"聊得好"变成看得见的成就
+
+---
+
+## ✨ 设计亮点
+
+| 特性 | 说明 |
+|------|------|
+| 🪟 场景化设计 | 浮动窗口完美融入你已有的聊天场景 |
+| 🎮 游戏化体验 | 好感度预测和实时变化，让聊天像玩游戏 |
+| 🧠 可解释 AI | 不只给建议，还告诉你为什么这样说更好 |
+| 🔇 离线可用 | 语音识别本地运行，隐私有保障 |
+
+---
+
+## 🚀 快速开始
+
+### 安装
+
 ```bash
-git clone <repository-url>
+git clone https://github.com/JStone2934/LiveGalGame.git
 cd LiveGalGame/desktop
-```
-
-### 2. 安装依赖
-安装项目依赖：
-```bash
 pnpm install
 ```
 
-**关键步骤**：安装并编译原生依赖（Electron 环境）：
+### 配置语音识别
+
 ```bash
-pnpm exec electron-builder install-app-deps
-```
-*注意：此步骤对于 `better-sqlite3` 和 `sharp` 等原生模块在 Electron 中正常工作至关重要。如果遇到 `NODE_MODULE_VERSION` 不匹配的错误，请务必重新运行此命令。*
-
-### 3. 配置语音识别 (ASR)
-
-本项目支持多种语音识别引擎，推荐使用 FunASR（阿里达摩院开源），也支持 whisper.cpp 作为备选。
-
-#### 方案一：FunASR（推荐）
-
-FunASR 是阿里巴巴达摩院开源的语音识别工具包，具有以下优势：
-- ✅ 优秀的中文识别效果
-- ✅ 支持多语言（中文、英文、粤语、日语、韩语等）
-- ✅ 支持实时语音识别
-- ✅ 内置 VAD（语音活动检测）和标点恢复
-- ✅ 模型自动下载，无需手动配置
-
-**安装步骤：**
-
-1. 确保已安装 Python 3.8 或更高版本：
-```bash
-python3 --version
-```
-
-2. 安装 FunASR：
-```bash
+# 安装 FunASR（推荐，中文识别效果最好）
 npm run setup-funasr
 ```
 
-3. 启动应用（会自动使用 FunASR）：
+### 启动
+
 ```bash
 pnpm dev
 ```
 
-**切换到 FunASR：**
-```bash
-# 临时切换
-WHISPER_IMPL=funasr pnpm dev
+---
 
-# 或设置环境变量（持久）
-export WHISPER_IMPL=funasr
-pnpm dev
-```
+## 💻 系统要求
 
-#### 方案二：Whisper.cpp（备选）
+- **Windows**: 10 / 11
+- **macOS**: 12.0+
+- 需要麦克风权限
+- Node.js 20+, Python 3.8+
 
-如果您不想安装 Python 环境，可以使用 whisper.cpp：
+---
 
-**对于 macOS (Apple Silicon)**: 预编译的二进制文件已包含在项目中，无需编译。
+## ❓ 常见问题
 
-**对于其他平台**: 如果你的平台是 Windows 或 macOS (Intel Silicon)，需要编译 whisper CLI：
-```bash
-npm run setup-whisper-cpp
-```
-*此脚本会自动编译 whisper.cpp 并生成 CLI 工具。编译成功后，二进制文件会保存在 `third_party/whisper.cpp/build/bin/whisper-cli`*
+**听不到声音？**
+- 检查系统麦克风权限
+- 在应用设置中选择正确的音频输入设备
 
-**下载语音模型**（所有平台都需要）：
-```bash
-npm run download-ggml-models
-```
-*默认下载 `base` 模型（约 140MB）。模型文件将保存在 `models/` 目录下。*
+**识别不准确？**
+- 调整麦克风距离（建议 20-30cm）
+- 在安静环境下效果更好
 
-**切换到 Whisper.cpp：**
-```bash
-# 临时切换
-WHISPER_IMPL=cpp pnpm dev
+**窗口挡住了聊天界面？**
+- 拖动窗口到合适位置
+- 可以调整窗口透明度
 
-# 或设置环境变量（持久）
-export WHISPER_IMPL=cpp
-pnpm dev
-```
+---
 
+## 🔧 开发者指南
 
-### 4. 启动开发环境
-```bash
-pnpm dev
-```
-此命令将同时启动：
-- Vite 开发服务器 (渲染进程)
-- Electron 主进程
+如果你想参与开发或了解技术细节，请查看项目源码：
 
-启动后，你应该能看到主窗口。点击 "实时助手" 或使用快捷键可以打开 HUD 浮窗。
+- `src/main.js` - Electron 主进程
+- `src/renderer/` - React 前端界面
+- `src/asr/` - 语音识别服务
+- `src/db/` - 本地数据存储
 
-## 常用命令
-
-| 命令 | 说明 |
-| --- | --- |
-| `pnpm dev` | 启动开发环境 |
-| `pnpm build:mac` | 构建 macOS 应用 (.dmg) |
-| `pnpm build:win` | 构建 Windows 应用 (.exe) |
-| `npm run setup-funasr` | 安装 FunASR（推荐的ASR引擎） |
-| `npm run setup-whisper-cpp` | 编译 whisper.cpp 插件 |
-| `npm run download-ggml-models` | 下载 whisper.cpp 模型 |
-
-
-## 故障排除
-
-### 1. `better-sqlite3` 或 `sharp` 报错
-如果启动时遇到类似 `was compiled against a different Node.js version` 的错误：
-```bash
-# 重新编译原生依赖
-pnpm exec electron-builder install-app-deps
-```
-对于 `sharp` 的特定问题，也可以尝试：
-```bash
-npm rebuild sharp --build-from-source
-```
-
-### 2. Whisper Addon 未找到
-确保你已经运行了 `npm run setup-whisper-cpp` 并且编译成功。检查 `third_party/whisper.cpp/examples/addon.node/build/Release/addon.node` 是否存在。
-
-### 3. 麦克风无声音
-- **macOS**: 确保终端或应用已获得麦克风权限（系统设置 -> 隐私与安全性 -> 麦克风）。
-- **Windows**: 检查系统声音设置中的输入设备。
-- 在应用内的 HUD 设置中，确保选择了正确的音频输入设备。
-
-## 项目结构
-
-- `src/main.js`: Electron 主进程入口
-- `src/preload.js`: 预加载脚本，处理 IPC 安全通信
-- `src/renderer/`: React 前端代码 (Vite)
-- `src/db/`: 数据库管理 (better-sqlite3)
-- `src/asr/`: 语音识别服务 (whisper.cpp / transformers.js)
-- `scripts/`: 辅助脚本 (模型下载、编译等)
-
-## 贡献指南
-欢迎提交 Issue 和 Pull Request。开发前请阅读 `DEVELOPMENT_PLAN.md` 了解开发计划。
-
+欢迎提交 PR！有问题请加 QQ 群：**1074602400**
 
