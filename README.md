@@ -1,80 +1,129 @@
-# 和女生聊天时能像GalGame一样有选项和字幕的神人应用
-有GalGame玩家反映和女生说话时不会弹出字幕与对话框，针对这种症状开发了这个APP
+# LiveGalGame
 
-<img width="2834" height="1641" alt="image" src="https://github.com/user-attachments/assets/d6c44e31-8362-4825-9d7c-a760a4720133" />
+<p align="center">
+  <strong>修复了现实世界里和异性对话没有选择项的 Bug</strong>
+</p>
 
+<p align="center">
+  <a href="https://github.com/JStone2934/LiveGalGame/tags">下载</a> •
+  <a href="#移动端">移动端</a> •
+  <a href="#桌面端">桌面端</a> •
+  <a href="https://www.bilibili.com/video/BV15Q1jBQEzq">B站演示</a>
+</p>
 
-作为整活向APP，目前没有接入AI，可以离线运行
+---
 
-### 画面卡顿是为了复刻GalGame切换CG的效果，可以手动调整更新速度或者切换成流畅的普通画面
+## 这是什么？
 
-APP在[tag](https://github.com/JStone2934/LiveGalGame/tags)中可以直接下载，报毒是正常状况，请放心使用
- 
+有 GalGame 玩家反映：和女生说话时不会弹出字幕与对话框，更没有选择项告诉你该说什么。
 
-## 使用教程
+**LiveGalGame 就是为了解决这个问题而生的。**
 
-- 点击齿轮按钮可以设置触发弹窗的关键词
-- SAVE和Q.SAVE可以保存当前截屏到手机
-- 好感度条会随着时间慢慢减少，有语音的时候会不断提高，选择不同的弹窗选项也会影响好感度
-- 点击快进可以调整CG效果画面的更新速度
-- 点击跳过可以把画面更新切换成实时的
-- 如遇初始化失败，可以试试重启APP，或者在手机设置里面把软件的语音权限打开再关闭
-### B站视频:[【-修复了GalGame玩家和女生聊天没有字幕的Bug-】](https://www.bilibili.com/video/BV15Q1jBQEzq/?share_source=copy_web&vd_source=181e7acfd50ad37dbfacd601ca302c13)
-<img width="2533" height="1427" alt="image" src="https://github.com/user-attachments/assets/65dd6c6f-bf47-4bc0-9695-034c7faa290d" />
+我们把 GalGame 的体验带到了现实世界——实时字幕、对话选项、好感度系统，让你的每一次对话都像在玩恋爱游戏。
 
-## 下载
+<img width="100%" alt="preview" src="https://github.com/user-attachments/assets/d6c44e31-8362-4825-9d7c-a760a4720133" />
 
-现在的软件在这里--->>[Release](https://github.com/JStone2934/LiveGalGame/tags)下载，功能更完整的版本会后续发布
+---
 
-夸克网盘：https://pan.quark.cn/s/1000136902b5
+## 核心功能
 
-CSDN下载链接：https://download.csdn.net/download/qq_63533710/92237453
+### 实时字幕
+对话内容实时转文字显示，再也不用担心听不清或忘记对方说了什么。
 
-百度网盘：通过网盘分享的文件：LiveGG
-链接: https://pan.baidu.com/s/1Bpt2DZNvjzT6BpKr8RyG-A?pwd=94g6 提取码: 94g6 
+### AI 对话建议
+在关键时刻给出多个回复选项，每个选项都带有：
+- **情感标签**：温柔、幽默、直接...
+- **好感度预测**：告诉你这样说会产生什么效果
 
-## 本地构建指南
+### 好感度系统
+可视化的好感度进度条，让你实时看到对话效果：
+> "好感度: 50 → 70 (+20 ↑)"
 
-1) 前提条件
+### 浮动窗口
+半透明、置顶、可拖动的小窗设计，完美叠加在任意聊天软件之上，不干扰你的正常使用。
 
-- JDK：17+
+---
 
-- Android SDK：36+
+## 移动端
 
-- Gradle：仓库内包含 `gradlew.bat` 与 gradle wrapper（Gradle 8.13），无需系统级安装 Gradle，使用仓库自带 wrapper 即可。
+**Android 应用** - 把你的手机变成 GalGame 界面
 
-2) 常用构建命令（在项目根目录，PowerShell）
+- 实时摄像头画面 + GalGame 风格 UI
+- 语音识别，自动生成字幕
+- 完整的 GalGame 交互体验（好感度条、对话框、选项按钮）
+- SAVE / Q.SAVE 截图保存功能
+- 可调节的"CG 切换"画面效果
 
-- 查看 Gradle wrapper 版本：
+**特色功能：**
+- 设置触发弹窗的关键词
+- 好感度随时间变化，语音互动会提升
+- 支持离线运行，无需联网
 
-	.\\gradlew.bat --version
+[查看移动端详细文档](./mobile/README.md)
 
-- 构建 Debug APK：
+### 下载
 
-	.\\gradlew.bat assembleDebug
+- **GitHub Release**: [点击下载](https://github.com/JStone2934/LiveGalGame/tags)
+- **夸克网盘**: https://pan.quark.cn/s/1000136902b5
+- **百度网盘**: https://pan.baidu.com/s/1Bpt2DZNvjzT6BpKr8RyG-A?pwd=94g6
 
-- 构建 Release APK（注意：若没有 `signing.properties` 则生成非签名的 release 包）：
+---
 
-	.\\gradlew.bat assembleRelease
+## 桌面端
 
-3) 签名
+**Windows / macOS 应用** - 专为语音聊天场景设计的智能助手
 
-项目 `app/build.gradle.kts` 会在根目录查找 `signing.properties`（若存在则读取签名信息）。如果你要生成已签名的 release 包，创建一个 `signing.properties` 文件放在项目根，例如：
+### 使用流程
 
-	keystore.path=release.keystore
-	keystore.password=your_store_password
-	key.alias=your_key_alias
-	key.password=your_key_password
+1. **创建对话对象**
+   - 填写对方的昵称、关系和备注
+   - 这些信息会帮助 AI 更好地理解场景
 
-并把 `release.keystore` 放在合适位置（与 `signing.properties` 中 path 对应）。请妥善保管密钥与密码。
+2. **启动对话**
+   - 点击"开始对话"，浮动小窗出现
+   - 半透明设计，完美贴合你的聊天窗口
 
+3. **实时对话**
+   - 开始聊天，双语字幕实时显示
+   - 再也不用担心听漏或忘记
 
+4. **获取 AI 建议**
+   - 在关键时刻，AI 自动给出回复建议
+   - 每个选项都有情感分析和效果预测
 
-## Star
+5. **看到效果**
+   - 选择回复后，好感度动画反馈
+   - 把"聊得好"变成可量化的成就感
+
+[查看桌面端详细文档](./desktop/README.md)
+
+---
+
+## 🎬 演示视频
+
+B站视频：[【修复了GalGame玩家和女生聊天没有字幕的Bug】](https://www.bilibili.com/video/BV15Q1jBQEzq/?share_source=copy_web&vd_source=181e7acfd50ad37dbfacd601ca302c13)
+
+<img width="100%" alt="demo" src="https://github.com/user-attachments/assets/65dd6c6f-bf47-4bc0-9695-034c7faa290d" />
+
+---
+
+## ⭐ Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=JStone2934/LiveGalGame&type=Date)](https://star-history.com/#JStone2934/LiveGalGame&Date)
 
+---
 
-## 欢迎自由开发，有活你就直接往里加
+## 🤝 加入我们
 
-QQ群：1074602400
+**QQ 群：1074602400**
+
+欢迎自由开发，有活你就直接往里加！
+
+提交 Issue 和 Pull Request 都非常欢迎。
+
+---
+
+## 📄 License
+
+本项目采用开源协议，详见 [LICENSE](./mobile/LICENSE)。
+

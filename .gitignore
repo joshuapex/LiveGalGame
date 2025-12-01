@@ -1,6 +1,7 @@
 *.iml
 .gradle
-/local.properties
+/local.
+/desktop/node_modules
 .DS_Store
 /build
 /captures
@@ -18,3 +19,11 @@ signing.properties
 /release.keystore
 /release
 .vscode
+
+# Build output
+/desktop/dist
+
+# Database files
+/desktop/data
+/desktop/.temp
+/desktop/tests
