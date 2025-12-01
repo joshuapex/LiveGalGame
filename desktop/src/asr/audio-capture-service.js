@@ -14,7 +14,7 @@ class AudioCaptureService {
     // 音频参数
     this.sampleRate = 16000; // Whisper 要求的采样率
     this.bufferSize = 4096; // 脚本处理器缓冲区大小
-    
+
     // 【优化】与FunASR的chunkStride对齐：9600 samples = 600ms
     this.targetChunkSamples = 9600;
     this.sendInterval = 600; // 发送间隔（ms）
@@ -28,7 +28,39 @@ class AudioCaptureService {
     this.audioAccumulators = new Map(); // sourceId -> Float32Array
     this.lastSendTime = new Map(); // sourceId -> timestamp
 
+    // 【共享流】已授权的系统音频流（跨窗口共享）
+    this.cachedSystemAudioStream = null;
+    this.systemAudioStreamAuthorized = false;
+
+    // 事件监听器
+    this.listeners = new Map();
+
     console.log('[AudioCaptureService] Created');
+  }
+
+  on(event, callback) {
+    if (!this.listeners.has(event)) {
+      this.listeners.set(event, new Set());
+    }
+    this.listeners.get(event).add(callback);
+  }
+
+  off(event, callback) {
+    if (this.listeners.has(event)) {
+      this.listeners.get(event).delete(callback);
+    }
+  }
+
+  emit(event, data) {
+    if (this.listeners.has(event)) {
+      this.listeners.get(event).forEach(callback => {
+        try {
+          callback(data);
+        } catch (err) {
+          console.error(`[AudioCaptureService] Error in listener for ${event}:`, err);
+        }
+      });
+    }
   }
 
   /**
@@ -91,9 +123,14 @@ class AudioCaptureService {
   /**
    * 开始捕获系统音频（使用 electron-audio-loopback）
    * @param {string} sourceId - 音频源 ID（speaker2）
+   * @param {Object} options - 选项
+   * @param {boolean} options.useCachedStream - 是否使用已缓存的流（避免弹出选择窗口）
+   * @param {boolean} options.forceNewStream - 强制获取新流（忽略缓存）
    */
-  async startSystemAudioCapture(sourceId) {
+  async startSystemAudioCapture(sourceId, options = {}) {
     try {
+      const { useCachedStream = true, forceNewStream = false } = options;
+
       if (!this.audioContext) {
         await this.initialize();
       }
@@ -103,7 +140,23 @@ class AudioCaptureService {
         await this.stopCapture(sourceId);
       }
 
-      console.log(`[AudioCaptureService] Starting system audio capture for ${sourceId}`);
+      console.log(`[AudioCaptureService] Starting system audio capture for ${sourceId}, options:`, { useCachedStream, forceNewStream });
+
+      // 【优化】优先使用已缓存的系统音频流（避免每次都弹出选择窗口）
+      if (useCachedStream && !forceNewStream && this.cachedSystemAudioStream) {
+        const audioTracks = this.cachedSystemAudioStream.getAudioTracks();
+        const hasActiveTrack = audioTracks.some(track => track.readyState === 'live' && track.enabled);
+
+        if (hasActiveTrack) {
+          console.log(`[AudioCaptureService] ✅ Using cached system audio stream with ${audioTracks.length} audio track(s)`);
+          this.setupAudioProcessing(sourceId, this.cachedSystemAudioStream);
+          return true;
+        } else {
+          console.log('[AudioCaptureService] Cached stream is no longer active, will request new stream');
+          this.cachedSystemAudioStream = null;
+          this.systemAudioStreamAuthorized = false;
+        }
+      }
 
       // 使用 electron-audio-loopback 方案
       // 1. 启用 loopback 音频
@@ -112,11 +165,43 @@ class AudioCaptureService {
         console.log('[AudioCaptureService] Loopback audio enabled');
       }
 
-      // 2. 使用 getDisplayMedia 获取系统音频
-      const displayStream = await navigator.mediaDevices.getDisplayMedia({
-        audio: true,
-        video: true // 需要同时请求视频才能获取音频
-      });
+      let displayStream;
+
+      // 尝试使用 getDesktopSourceId 获取源 ID，以避开选择器弹窗
+      if (window.electronAPI?.getDesktopSourceId) {
+        try {
+          const sourceId = await window.electronAPI.getDesktopSourceId();
+          if (sourceId) {
+            console.log(`[AudioCaptureService] Got desktop source ID: ${sourceId}, attempting getUserMedia`);
+            displayStream = await navigator.mediaDevices.getUserMedia({
+              audio: {
+                mandatory: {
+                  chromeMediaSource: 'desktop',
+                  chromeMediaSourceId: sourceId
+                }
+              },
+              video: {
+                mandatory: {
+                  chromeMediaSource: 'desktop',
+                  chromeMediaSourceId: sourceId
+                }
+              }
+            });
+            console.log('[AudioCaptureService] ✅ System audio stream obtained via getUserMedia (no picker)');
+          }
+        } catch (err) {
+          console.warn('[AudioCaptureService] Failed to get stream via getUserMedia, falling back to getDisplayMedia:', err);
+        }
+      }
+
+      // 如果 getUserMedia 失败或不可用，回退到 getDisplayMedia (会弹出选择器)
+      if (!displayStream) {
+        console.log('[AudioCaptureService] Falling back to getDisplayMedia (picker will appear)');
+        displayStream = await navigator.mediaDevices.getDisplayMedia({
+          audio: true,
+          video: true // 需要同时请求视频才能获取音频
+        });
+      }
 
       // 3. 禁用 loopback 音频（获取流后即可禁用）
       if (window.electronAPI?.disableLoopbackAudio) {
@@ -143,17 +228,66 @@ class AudioCaptureService {
         console.log(`[AudioCaptureService] Audio track ${index + 1}: label=${track.label}, enabled=${track.enabled}`);
       });
 
+      // 【缓存】保存已授权的流供后续使用
+      this.cachedSystemAudioStream = displayStream;
+      this.systemAudioStreamAuthorized = true;
+      console.log('[AudioCaptureService] System audio stream cached for reuse');
+
       this.setupAudioProcessing(sourceId, displayStream);
       return true;
     } catch (error) {
       console.error(`[AudioCaptureService] ❌ Error starting system audio capture:`, error);
-      
+
       // 确保禁用 loopback
       if (window.electronAPI?.disableLoopbackAudio) {
-        await window.electronAPI.disableLoopbackAudio().catch(() => {});
+        await window.electronAPI.disableLoopbackAudio().catch(() => { });
       }
-      
+
       throw error;
+    }
+  }
+
+  /**
+   * 检查是否有已授权的系统音频流可用
+   * @returns {boolean} 是否有可用的缓存流
+   */
+  hasAuthorizedSystemAudioStream() {
+    if (!this.cachedSystemAudioStream) {
+      return false;
+    }
+    const audioTracks = this.cachedSystemAudioStream.getAudioTracks();
+    return audioTracks.some(track => track.readyState === 'live' && track.enabled);
+  }
+
+  /**
+   * 获取系统音频流状态
+   * @returns {Object} 状态信息
+   */
+  getSystemAudioStreamStatus() {
+    if (!this.cachedSystemAudioStream) {
+      return {
+        available: false,
+        authorized: false,
+        message: '未授权系统音频，需要在设置页面测试音频后才能使用'
+      };
+    }
+
+    const audioTracks = this.cachedSystemAudioStream.getAudioTracks();
+    const hasActiveTrack = audioTracks.some(track => track.readyState === 'live' && track.enabled);
+
+    if (hasActiveTrack) {
+      return {
+        available: true,
+        authorized: true,
+        trackCount: audioTracks.length,
+        message: '系统音频已授权并可用'
+      };
+    } else {
+      return {
+        available: false,
+        authorized: this.systemAudioStreamAuthorized,
+        message: '系统音频流已过期，需要重新授权'
+      };
     }
   }
 
@@ -201,6 +335,30 @@ class AudioCaptureService {
     try {
       const inputData = event.inputBuffer.getChannelData(0);
 
+      // 计算实时音量 (RMS)
+      let sumSquared = 0;
+      for (let i = 0; i < inputData.length; i++) {
+        sumSquared += inputData[i] * inputData[i];
+      }
+      const rms = Math.sqrt(sumSquared / inputData.length);
+
+      // 使用 dB 计算音量，使其更符合人耳感知 (Logarithmic)
+      // 假设最小可感知音量为 -60dB，最大为 0dB
+      let volume = 0;
+      if (rms > 0) {
+        const db = 20 * Math.log10(rms);
+        // 将 -60dB ~ 0dB 映射到 0 ~ 100
+        volume = Math.max(0, Math.min(100, (db + 60) / 60 * 100));
+      }
+
+      // 发送音量更新事件 (限制频率)
+      const now = Date.now();
+      if (!this._lastVolumeEmit) this._lastVolumeEmit = {};
+      if (!this._lastVolumeEmit[sourceId] || now - this._lastVolumeEmit[sourceId] > 50) {
+        this.emit('volume-update', { sourceId, volume });
+        this._lastVolumeEmit[sourceId] = now;
+      }
+
       // 累积音频数据
       const accumulator = this.audioAccumulators.get(sourceId);
       const newAccumulator = new Float32Array(accumulator.length + inputData.length);
@@ -208,7 +366,6 @@ class AudioCaptureService {
       newAccumulator.set(inputData, accumulator.length);
       this.audioAccumulators.set(sourceId, newAccumulator);
 
-      const now = Date.now();
       const lastSend = this.lastSendTime.get(sourceId) || now;
       const timeSinceLastSend = now - lastSend;
       const accumulatedSamples = newAccumulator.length;

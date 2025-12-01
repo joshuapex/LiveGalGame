@@ -317,24 +317,21 @@ function SessionSelector({ onSessionSelected, onClose }) {
 
 function Hud() {
   const [messages, setMessages] = useState([]);
+  const [streamingMessages, setStreamingMessages] = useState({});
+  // 临时禁用streaming功能以修复HUD关闭问题
+  const streamingDisabled = true;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showSelector, setShowSelector] = useState(true);
   const [sessionInfo, setSessionInfo] = useState(null);
   const transcriptRef = useRef(null);
-  
+
   // 音量检测相关状态
   const [micVolumeLevel, setMicVolumeLevel] = useState(0);
   const [systemVolumeLevel, setSystemVolumeLevel] = useState(0);
   const [hasSystemAudio, setHasSystemAudio] = useState(false);
-  const audioContextRef = useRef(null);
-  const micAnalyserRef = useRef(null);
-  const systemAnalyserRef = useRef(null);
-  const micDataArrayRef = useRef(null);
-  const systemDataArrayRef = useRef(null);
-  const animationIdRef = useRef(null);
-  const micStreamRef = useRef(null);
-  const systemStreamRef = useRef(null);
+  const [systemAudioNotAuthorized, setSystemAudioNotAuthorized] = useState(false); // 系统音频未授权提示
+  const [isListening, setIsListening] = useState(false);
 
   const loadMessages = useCallback(async (conversationId) => {
     setLoading(true);
@@ -368,52 +365,12 @@ function Hud() {
       setLoading(false);
     }
 
-    // 自动启动 ASR
-    try {
+    // 确保有对话 ID（如果是新对话，需要先创建）
+    let conversationId = info.conversationId;
+    if (!conversationId && info.characterId) {
       const api = window.electronAPI;
-      if (!api?.asrGetAudioSources || !api?.asrStart) {
-        console.error('ASR API not available');
-        return;
-      }
-
-      // 检查音频源配置
-      const audioSources = await api.asrGetAudioSources();
-      console.log('[HUD] 所有音频源配置:', JSON.stringify(audioSources, null, 2));
-
-      // speaker1 = 用户（麦克风）
-      // speaker2 = 角色（系统音频）
-      const speaker1 = audioSources.find(s => s.id === 'speaker1');
-      const speaker2 = audioSources.find(s => s.id === 'speaker2');
-
-      console.log('[HUD] 找到的音频源配置:', {
-        speaker1: speaker1 ? { id: speaker1.id, name: speaker1.name, device_id: speaker1.device_id, is_active: speaker1.is_active } : null,
-        speaker2: speaker2 ? { id: speaker2.id, name: speaker2.name, device_id: speaker2.device_id, is_active: speaker2.is_active } : null
-      });
-
-      // 检查speaker1是否存在且激活
-      if (!speaker1) {
-        console.error('[HUD] 未找到麦克风配置 (speaker1)');
-        setError('未找到麦克风配置，请在设置中配置音频源');
-        return;
-      }
-
-      const isSpeaker1Active = speaker1.is_active === 1 || speaker1.is_active === true || speaker1.is_active === '1';
-      if (!isSpeaker1Active) {
-        console.error('[HUD] 麦克风配置未激活 (speaker1)');
-        setError('麦克风配置未激活，请在设置中启用音频源');
-        return;
-      }
-
-      if (!speaker1.device_id) {
-        console.error('[HUD] 麦克风设备ID未配置 (speaker1)');
-        setError('麦克风设备ID未配置，请在设置中配置音频源');
-        return;
-      }
-
-      // 确保有对话 ID（如果是新对话，需要先创建）
-      let conversationId = info.conversationId;
-      if (!conversationId && info.characterId) {
-        if (api.dbCreateConversation) {
+      if (api && api.dbCreateConversation) {
+        try {
           const newConv = await api.dbCreateConversation({
             character_id: info.characterId,
             title: info.conversationName || '新对话'
@@ -422,55 +379,103 @@ function Hud() {
           if (conversationId) {
             setSessionInfo({ ...info, conversationId });
           }
+        } catch (err) {
+          console.error('创建新对话失败:', err);
+          setError('创建新对话失败');
         }
       }
+    }
+  };
 
-      if (conversationId) {
-        // 1. 通知主进程开始 ASR
-        await api.asrStart(conversationId);
-
-        // 2. 在渲染进程开始捕获音频
-        try {
-          console.log('[HUD] 开始启动音频捕获...');
-          
-          // 启动 speaker1 (用户/麦克风)
-          console.log(`[HUD] 启动 speaker1 (用户/麦克风): device=${speaker1.device_id}`);
-          await audioCaptureService.startMicrophoneCapture('speaker1', speaker1.device_id);
-          console.log(`[HUD] ✅ speaker1 (麦克风) 捕获已启动`);
-          
-          // 启动 speaker2 (角色/系统音频) - 使用 electron-audio-loopback
-          let systemAudioEnabled = false;
-          
-          if (speaker2) {
-            const isSpeaker2Active = speaker2.is_active === 1 || speaker2.is_active === true || speaker2.is_active === '1';
-            if (isSpeaker2Active) {
-              try {
-                console.log(`[HUD] 启动 speaker2 (角色/系统音频) 使用 electron-audio-loopback`);
-                await audioCaptureService.startSystemAudioCapture('speaker2');
-                systemAudioEnabled = true;
-                console.log(`[HUD] ✅ speaker2 (系统音频) 捕获已启动`);
-              } catch (speaker2Error) {
-                console.error('[HUD] ❌ speaker2 (系统音频) 捕获启动失败:', speaker2Error);
-                console.warn('[HUD] ⚠️ 系统音频捕获失败，但继续运行（仅使用麦克风）');
-                // 不设置错误，允许继续使用麦克风
-              }
-            } else {
-              console.log('[HUD] Speaker2未激活，跳过系统音频捕获');
-            }
-          } else {
-            console.log('[HUD] 未找到speaker2配置，跳过系统音频捕获');
-          }
-          
-          // 启动音量检测
-          console.log('[HUD] 启动音量检测:', { 
-            micDeviceId: speaker1.device_id, 
-            systemAudioEnabled
-          });
-          await startVolumeMonitoring(speaker1.device_id, speaker1.device_name, systemAudioEnabled);
-        } catch (captureError) {
-          console.error('[HUD] Failed to start audio capture:', captureError);
-          setError(`音频捕获启动失败: ${captureError.message}`);
+  const toggleListening = async () => {
+    if (isListening) {
+      // 停止监听
+      try {
+        await audioCaptureService.stopAllCaptures();
+        const api = window.electronAPI;
+        if (api?.asrStop) {
+          await api.asrStop();
         }
+        setIsListening(false);
+        setMicVolumeLevel(0);
+        setSystemVolumeLevel(0);
+      } catch (err) {
+        console.error('停止监听失败:', err);
+      }
+      return;
+    }
+
+    // 开始监听
+    try {
+      const api = window.electronAPI;
+      if (!api?.asrGetAudioSources || !api?.asrStart) {
+        console.error('ASR API not available');
+        return;
+      }
+
+      const conversationId = sessionInfo?.conversationId;
+      if (!conversationId) {
+        setError('未找到有效的对话ID');
+        return;
+      }
+
+      // 检查音频源配置
+      const audioSources = await api.asrGetAudioSources();
+      const speaker1 = audioSources.find(s => s.id === 'speaker1');
+      const speaker2 = audioSources.find(s => s.id === 'speaker2');
+
+      // 检查speaker1是否存在且激活
+      if (!speaker1) {
+        setError('未找到麦克风配置，请在设置中配置音频源');
+        return;
+      }
+
+      const isSpeaker1Active = speaker1.is_active === 1 || speaker1.is_active === true || speaker1.is_active === '1';
+      if (!isSpeaker1Active) {
+        setError('麦克风配置未激活，请在设置中启用音频源');
+        return;
+      }
+
+      if (!speaker1.device_id) {
+        setError('麦克风设备ID未配置，请在设置中配置音频源');
+        return;
+      }
+
+      // 1. 通知主进程开始 ASR
+      await api.asrStart(conversationId);
+
+      // 2. 在渲染进程开始捕获音频
+      try {
+        console.log('[HUD] 开始启动音频捕获...');
+
+        // 启动 speaker1 (用户/麦克风)
+        await audioCaptureService.startMicrophoneCapture('speaker1', speaker1.device_id);
+
+        // 启动 speaker2 (角色/系统音频)
+        let systemAudioEnabled = false;
+        if (speaker2) {
+          const isSpeaker2Active = speaker2.is_active === 1 || speaker2.is_active === true || speaker2.is_active === '1';
+          if (isSpeaker2Active) {
+            try {
+              // 尝试启动系统音频捕获 (如果缓存不可用，会尝试获取新流，可能弹出选择器)
+              await audioCaptureService.startSystemAudioCapture('speaker2');
+              systemAudioEnabled = true;
+              setSystemAudioNotAuthorized(false);
+            } catch (speaker2Error) {
+              console.error('[HUD] ❌ speaker2 (系统音频) 启动失败:', speaker2Error);
+              setSystemAudioNotAuthorized(true);
+            }
+          }
+        }
+
+        setHasSystemAudio(systemAudioEnabled);
+        setIsListening(true);
+        setError(''); // 清除之前的错误
+      } catch (captureError) {
+        console.error('[HUD] Failed to start audio capture:', captureError);
+        setError(`音频捕获启动失败: ${captureError.message}`);
+        // 如果启动失败，尝试停止已启动的部分
+        await audioCaptureService.stopAllCaptures();
       }
     } catch (error) {
       console.error('[HUD] Error starting ASR:', error);
@@ -499,6 +504,29 @@ function Hud() {
     }
   }, [messages]);
 
+  const updateStreamingMessage = useCallback((sourceId, sender, content, timestamp) => {
+    if (!sourceId || !content) return;
+    setStreamingMessages(prev => ({
+      ...prev,
+      [sourceId]: {
+        id: `stream-${sourceId}`,
+        sender,
+        content,
+        timestamp: timestamp || Date.now()
+      }
+    }));
+  }, []);
+
+  const clearStreamingMessage = useCallback((sourceId) => {
+    if (!sourceId) return;
+    setStreamingMessages(prev => {
+      if (!prev[sourceId]) return prev;
+      const next = { ...prev };
+      delete next[sourceId];
+      return next;
+    });
+  }, []);
+
   // 监听 ASR 识别结果
   useEffect(() => {
     const api = window.electronAPI;
@@ -526,6 +554,12 @@ function Hud() {
 
         // 默认：ASRManager 已经写入数据库并返回 message 记录
         setMessages(prev => [...prev, message]);
+        // 清除对应的streaming消息
+        setStreamingMessages(prev => {
+          const newState = { ...prev };
+          delete newState[message.source_id];
+          return newState;
+        });
       } catch (error) {
         console.error('Error handling ASR result:', error);
         setError(`处理识别结果失败：${error.message}`);
@@ -537,8 +571,8 @@ function Hud() {
       try {
         if (!updatedMessage || !updatedMessage.id) return;
 
-        setMessages(prev => prev.map(msg => 
-          msg.id === updatedMessage.id 
+        setMessages(prev => prev.map(msg =>
+          msg.id === updatedMessage.id
             ? { ...msg, content: updatedMessage.content }
             : msg
         ));
@@ -554,17 +588,48 @@ function Hud() {
     };
 
     // 注册监听器
+    const handlePartialUpdate = (payload) => {
+      try {
+        const sourceId = payload?.sourceId || payload?.sessionId;
+        const content = payload?.content;
+        if (!sourceId || !content) return;
+        const sender = sourceId === 'speaker1' ? 'user' : 'character';
+        updateStreamingMessage(sourceId, sender, content, payload?.timestamp);
+      } catch (error) {
+        console.error('Error handling partial update:', error);
+      }
+    };
+
+    const handlePartialClear = (payload) => {
+      try {
+        const sourceId = payload?.sourceId || payload?.sessionId;
+        if (!sourceId) return;
+        clearStreamingMessage(sourceId);
+      } catch (error) {
+        console.error('Error clearing partial message:', error);
+      }
+    };
+
     api.on('asr-sentence-complete', handleSentenceComplete);
     api.on('asr-sentence-update', handleSentenceUpdate);
     api.on('asr-error', handleError);
+    // 临时禁用streaming事件监听
+    if (!streamingDisabled) {
+      api.on('asr-partial-update', handlePartialUpdate);
+      api.on('asr-partial-clear', handlePartialClear);
+    }
 
     return () => {
       // 清理监听器
       api.removeListener('asr-sentence-complete', handleSentenceComplete);
       api.removeListener('asr-sentence-update', handleSentenceUpdate);
       api.removeListener('asr-error', handleError);
+      if (!streamingDisabled) {
+        api.removeListener('asr-partial-update', handlePartialUpdate);
+        api.removeListener('asr-partial-clear', handlePartialClear);
+      }
     };
-  }, [sessionInfo]);
+  }, [sessionInfo?.conversationId]); // 只依赖会话ID，避免函数引用变化导致的重新注册
 
   const handleClose = () => {
     if (window.electronAPI?.closeHUD) {
@@ -573,165 +638,24 @@ function Hud() {
   };
 
   const handleSwitchSession = () => {
-    // 停止音量检测
-    stopVolumeMonitoring();
     setShowSelector(true);
     setSessionInfo(null);
   };
 
-  // 启动音量检测
-  const startVolumeMonitoring = async (micDeviceId, micDeviceName, systemAudioEnabled) => {
-    try {
-      console.log('[VolumeMonitoring] 开始启动音量检测:', {
-        micDeviceId,
-        micDeviceName,
-        systemAudioEnabled
-      });
-
-      // 先停止之前的检测
-      stopVolumeMonitoring();
-
-      // 等待一小段时间确保 audioCaptureService 已完全启动
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // 使用 audioCaptureService 的 AudioContext，避免冲突
-      if (!audioContextRef.current) {
-        // 尝试复用 audioCaptureService 的 AudioContext
-        if (audioCaptureService.audioContext && audioCaptureService.audioContext.state !== 'closed') {
-          audioContextRef.current = audioCaptureService.audioContext;
-          console.log('[VolumeMonitoring] 复用 audioCaptureService 的 AudioContext');
-        } else {
-          // 如果 audioCaptureService 的 AudioContext 不可用，创建新的
-          audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
-          console.log('[VolumeMonitoring] 创建新的 AudioContext (audioCaptureService 的 AudioContext 不可用)');
-        }
-      }
-
-      // 从 audioCaptureService 获取麦克风流
-      const micStream = audioCaptureService.streams.get('speaker1');
-      if (!micStream) {
-        throw new Error('无法获取麦克风流，audioCaptureService 可能未正确启动');
-      }
-
-      console.log('[VolumeMonitoring] 从 audioCaptureService 获取麦克风流');
-
-      // 创建麦克风分析器
-      const micAnalyser = audioContextRef.current.createAnalyser();
-      micAnalyser.fftSize = 256;
-      micAnalyser.smoothingTimeConstant = 0.8;
-      micAnalyserRef.current = micAnalyser;
-      micDataArrayRef.current = new Uint8Array(micAnalyser.frequencyBinCount);
-
-      micStreamRef.current = micStream;
-
-      const micSource = audioContextRef.current.createMediaStreamSource(micStream);
-      micSource.connect(micAnalyser);
-      console.log('[VolumeMonitoring] 用户音量检测已启动');
-
-      // 如果启用了系统音频，从 audioCaptureService 获取流进行音量检测
-      if (systemAudioEnabled) {
-        console.log('[VolumeMonitoring] 配置系统音频检测');
-
-        // 再次等待确保系统音频流已准备好
-        await new Promise(resolve => setTimeout(resolve, 1000));
-
-        const systemStream = audioCaptureService.streams.get('speaker2');
-        if (systemStream) {
-          try {
-            const systemAnalyser = audioContextRef.current.createAnalyser();
-            systemAnalyser.fftSize = 256;
-            systemAnalyser.smoothingTimeConstant = 0.8;
-            systemAnalyserRef.current = systemAnalyser;
-            systemDataArrayRef.current = new Uint8Array(systemAnalyser.frequencyBinCount);
-
-            systemStreamRef.current = systemStream;
-            const systemSource = audioContextRef.current.createMediaStreamSource(systemStream);
-            systemSource.connect(systemAnalyser);
-            setHasSystemAudio(true);
-            console.log('[VolumeMonitoring] 角色音量检测已启动');
-          } catch (systemError) {
-            console.warn('[VolumeMonitoring] 系统音频音量检测失败:', systemError);
-            setHasSystemAudio(false);
-          }
-        } else {
-          console.warn('[VolumeMonitoring] 未找到系统音频流，系统音频可能未正确启动');
-          setHasSystemAudio(false);
-        }
-      } else {
-        console.log('[VolumeMonitoring] 系统音频未启用，跳过角色音量检测');
-        setHasSystemAudio(false);
-      }
-
-      // 开始分析音量
-      console.log('[VolumeMonitoring] 开始音量分析循环');
-      analyzeVolume();
-    } catch (error) {
-      console.error('[VolumeMonitoring] 启动音量检测失败:', error);
-      setError(`音量检测启动失败: ${error.message}`);
-    }
-  };
-
-  // 停止音量检测
-  const stopVolumeMonitoring = () => {
-    if (animationIdRef.current) {
-      cancelAnimationFrame(animationIdRef.current);
-      animationIdRef.current = null;
-    }
-
-    // 停止媒体流
-    if (micStreamRef.current) {
-      micStreamRef.current.getTracks().forEach(track => track.stop());
-      micStreamRef.current = null;
-    }
-
-    if (systemStreamRef.current) {
-      systemStreamRef.current.getTracks().forEach(track => track.stop());
-      systemStreamRef.current = null;
-    }
-
-    if (audioContextRef.current) {
-      audioContextRef.current.close();
-      audioContextRef.current = null;
-    }
-
-    setMicVolumeLevel(0);
-    setSystemVolumeLevel(0);
-    setHasSystemAudio(false);
-  };
-
-  // 分析音量
-  const analyzeVolume = () => {
-    // 分析麦克风音量
-    if (micAnalyserRef.current && micDataArrayRef.current) {
-      micAnalyserRef.current.getByteFrequencyData(micDataArrayRef.current);
-      let micSum = 0;
-      for (let i = 0; i < micDataArrayRef.current.length; i++) {
-        micSum += micDataArrayRef.current[i];
-      }
-      const micAverage = micSum / micDataArrayRef.current.length;
-      const micVolume = Math.min(100, (micAverage / 255) * 100);
-      setMicVolumeLevel(micVolume);
-    }
-
-    // 分析系统音频音量
-    if (systemAnalyserRef.current && systemDataArrayRef.current) {
-      systemAnalyserRef.current.getByteFrequencyData(systemDataArrayRef.current);
-      let systemSum = 0;
-      for (let i = 0; i < systemDataArrayRef.current.length; i++) {
-        systemSum += systemDataArrayRef.current[i];
-      }
-      const systemAverage = systemSum / systemDataArrayRef.current.length;
-      const systemVolume = Math.min(100, (systemAverage / 255) * 100);
-      setSystemVolumeLevel(systemVolume);
-    }
-
-    animationIdRef.current = requestAnimationFrame(analyzeVolume);
-  };
-
-  // 组件卸载时清理
+  // 监听音量更新事件
   useEffect(() => {
+    const handleVolumeUpdate = ({ sourceId, volume }) => {
+      if (sourceId === 'speaker1') {
+        setMicVolumeLevel(volume);
+      } else if (sourceId === 'speaker2') {
+        setSystemVolumeLevel(volume);
+      }
+    };
+
+    audioCaptureService.on('volume-update', handleVolumeUpdate);
+
     return () => {
-      stopVolumeMonitoring();
+      audioCaptureService.off('volume-update', handleVolumeUpdate);
     };
   }, []);
 
@@ -748,7 +672,7 @@ function Hud() {
     if (error) {
       // 检查是否是系统音频捕获失败的错误（不应该阻止应用运行）
       const isSystemAudioError = error.includes('系统音频捕获失败');
-      
+
       return (
         <div className={`hud-status ${isSystemAudioError ? 'hud-warning' : 'hud-error'}`}>
           <p className="hud-status-text" style={{ whiteSpace: 'pre-line', textAlign: 'left' }}>
@@ -761,20 +685,38 @@ function Hud() {
     if (!messages.length) {
       return (
         <div className="hud-status">
-          <p className="hud-status-text">{sessionInfo?.isNew ? '新对话，开始聊天吧！' : '该对话还没有消息'}</p>
+          <p className="hud-status-text">
+            {isListening ? (sessionInfo?.isNew ? '新对话，开始聊天吧！' : '该对话还没有消息') : '点击上方播放按钮开始监听'}
+          </p>
         </div>
       );
     }
 
-    return messages.map((msg, index) => {
-      const isUser = msg.sender === 'user';
-      const key = msg.id ?? `${msg.sender}-${msg.timestamp ?? index}`;
-      return (
-        <div className={`message-item ${isUser ? 'message-user' : 'message-other'}`} key={key}>
-          <div className="message-bubble">{msg.content || msg.text || ''}</div>
-        </div>
-      );
-    });
+    const streamingItems = streamingDisabled ? [] : Object.values(streamingMessages);
+    return (
+      <>
+        {messages.map((msg, index) => {
+          const isUser = msg.sender === 'user';
+          const key = msg.id ?? `${msg.sender}-${msg.timestamp ?? index}`;
+          return (
+            <div className={`message-item ${isUser ? 'message-user' : 'message-other'}`} key={key}>
+              <div className="message-bubble">{msg.content || msg.text || ''}</div>
+            </div>
+          );
+        })}
+        {!streamingDisabled && streamingItems.map((msg) => {
+          const isUser = msg.sender === 'user';
+          return (
+            <div className={`message-item ${isUser ? 'message-user' : 'message-other'} message-streaming`} key={msg.id}>
+              <div className="message-bubble">
+                {msg.content}
+                <span className="message-streaming-indicator">…</span>
+              </div>
+            </div>
+          );
+        })}
+      </>
+    );
   };
 
   if (showSelector) {
@@ -792,6 +734,21 @@ function Hud() {
           <span className="hud-title">{sessionInfo?.characterName || '心情助手'}</span>
         </div>
         <div className="hud-controls">
+          <button
+            className={`control-btn ${isListening ? 'listening' : ''}`}
+            onClick={toggleListening}
+            title={isListening ? "停止监听" : "开始监听"}
+            style={{ color: isListening ? '#ff4d4f' : '#52c41a', marginRight: '8px' }}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              {isListening ? (
+                <rect x="6" y="4" width="4" height="16"></rect>
+              ) : (
+                <polygon points="5 3 19 12 5 21 5 3"></polygon>
+              )}
+              {isListening && <rect x="14" y="4" width="4" height="16"></rect>}
+            </svg>
+          </button>
           <button className="control-btn" onClick={handleSwitchSession} title="切换会话">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path>
@@ -811,7 +768,7 @@ function Hud() {
         <div className="transcript-area" ref={transcriptRef}>
           {renderTranscriptContent()}
         </div>
-        
+
         {/* 音量显示 */}
         {sessionInfo && (
           <div className="volume-indicators">
@@ -834,7 +791,15 @@ function Hud() {
                 />
               </div>
               <span className="volume-value">{systemVolumeLevel.toFixed(0)}%</span>
+              {systemAudioNotAuthorized && (
+                <span className="volume-warning" title="系统音频未授权，请先在设置页面测试音频">⚠️</span>
+              )}
             </div>
+            {systemAudioNotAuthorized && (
+              <div className="system-audio-hint">
+                💡 系统音频未授权，请检查设置
+              </div>
+            )}
           </div>
         )}
       </section>

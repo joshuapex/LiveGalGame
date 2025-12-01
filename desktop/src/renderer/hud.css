@@ -67,14 +67,16 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  -webkit-app-region: drag; /* Enable native window dragging */
+  -webkit-app-region: drag;
+  /* Enable native window dragging */
 }
 
 .hud-drag-zone {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  cursor: default; /* CSS drag handles cursor automatically mostly */
+  cursor: default;
+  /* CSS drag handles cursor automatically mostly */
   user-select: none;
 }
 
@@ -91,7 +93,8 @@ body {
 .hud-controls {
   display: flex;
   gap: 10px;
-  -webkit-app-region: no-drag; /* Disable drag for controls */
+  -webkit-app-region: no-drag;
+  /* Disable drag for controls */
 }
 
 .control-btn {
@@ -107,7 +110,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  -webkit-app-region: no-drag; /* Double ensure */
+  -webkit-app-region: no-drag;
+  /* Double ensure */
 }
 
 .control-btn svg {
@@ -132,9 +136,11 @@ body {
   0% {
     opacity: 1;
   }
+
   50% {
     opacity: 0.4;
   }
+
   100% {
     opacity: 1;
   }
@@ -239,6 +245,31 @@ body {
 .message-user .message-bubble {
   background: rgba(197, 22, 98, 0.12);
   color: #c51662;
+}
+
+.message-streaming .message-bubble {
+  opacity: 0.85;
+  border: 1px dashed rgba(197, 22, 98, 0.4);
+  position: relative;
+}
+
+.message-streaming-indicator {
+  display: inline-block;
+  margin-left: 6px;
+  color: rgba(197, 22, 98, 0.8);
+  animation: pulseDots 1.2s ease-in-out infinite;
+}
+
+@keyframes pulseDots {
+  0% {
+    opacity: 0.2;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.2;
+  }
 }
 
 .suggestions-grid {
@@ -588,53 +619,20 @@ body {
   font-size: 10px;
 }
 
-@media (max-width: 768px) {
-  .hud-container {
-    max-height: 90vh;
-  }
-
-  .hud-header {
-    padding: 12px 16px;
-  }
-
-  .hud-title {
-    font-size: 14px;
-  }
-
-  .transcript-area {
-    height: 120px;
-  }
-
-  .suggestions-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .asr-speakers {
-    grid-template-columns: 1fr;
-  }
+/* 系统音频未授权提示 */
+.volume-warning {
+  margin-left: 4px;
+  cursor: help;
 }
 
-
-
-.volume-bar {
-  height: 100%;
-  border-radius: 3px;
-  transition: width 0.1s ease;
-}
-
-.volume-bar-mic {
-  background: linear-gradient(to right, #3b82f6, #2563eb);
-}
-
-.volume-bar-system {
-  background: linear-gradient(to right, #a855f7, #9333ea);
-}
-
-.volume-value {
-  width: 32px;
-  text-align: right;
-  color: rgba(15, 23, 42, 0.6);
+.system-audio-hint {
   font-size: 10px;
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.1);
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  margin-top: 4px;
 }
 
 @media (max-width: 768px) {
@@ -662,59 +660,3 @@ body {
     grid-template-columns: 1fr;
   }
 }
-
-
-
-.volume-bar {
-  height: 100%;
-  border-radius: 3px;
-  transition: width 0.1s ease;
-}
-
-.volume-bar-mic {
-  background: linear-gradient(to right, #3b82f6, #2563eb);
-}
-
-.volume-visualizer {
-  background: rgba(15, 23, 42, 0.1);
-  border-radius: 3px;
-  overflow: hidden;
-}
-
-.volume-bar-system {
-  background: linear-gradient(to right, #a855f7, #9333ea);
-}
-
-.volume-value {
-  width: 32px;
-  text-align: right;
-  color: rgba(15, 23, 42, 0.6);
-  font-size: 10px;
-}
-
-@media (max-width: 768px) {
-  .hud-container {
-    max-height: 90vh;
-  }
-
-  .hud-header {
-    padding: 12px 16px;
-  }
-
-  .hud-title {
-    font-size: 14px;
-  }
-
-  .transcript-area {
-    height: 120px;
-  }
-
-  .suggestions-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .asr-speakers {
-    grid-template-columns: 1fr;
-  }
-}
-

@@ -239,6 +239,7 @@ function Settings() {
     }
   };
 
+
   // 加载音频源配置
   const loadAudioSources = async () => {
     try {
@@ -967,12 +968,14 @@ function Settings() {
                       setDesktopCapturerError(null);
                     }
                   }}
-                  className="w-4 h-4 text-primary border-border-light dark:border-border-dark rounded focus:ring-primary"
+                  className="rounded border-border-light dark:border-border-dark text-primary focus:ring-primary"
                 />
-                <label htmlFor="systemAudio" className="text-sm text-text-light dark:text-text-dark">
+                <label htmlFor="systemAudio" className="text-sm font-medium text-text-light dark:text-text-dark">
                   同时捕获系统音频（角色音频）
                 </label>
               </div>
+
+
 
               <div className="border-t border-border-light dark:border-border-dark pt-4">
                 <h3 className="text-sm font-medium text-text-light dark:text-text-dark mb-3">

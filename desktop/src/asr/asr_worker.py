@@ -373,6 +373,36 @@ def load_model() -> WhisperModel:
     )
     sys.stderr.flush()
 
+    # 检查是否为本地模型路径（以.pt或.bin结尾的文件，或者目录）
+    if os.path.isfile(model_name) and (model_name.endswith('.pt') or model_name.endswith('.bin')):
+        sys.stderr.write(f"[ASR Worker] Loading local model file: {model_name}\n")
+        sys.stderr.flush()
+        model = WhisperModel(
+            model_name,
+            device=DEVICE,
+            compute_type=COMPUTE_TYPE,
+            cpu_threads=CPU_THREADS,
+            num_workers=NUM_WORKERS,
+        )
+        sys.stderr.write("[ASR Worker] Local model loaded successfully\n")
+        sys.stderr.flush()
+        return model
+    
+    # 检查是否为本地模型目录
+    if os.path.isdir(model_name):
+        sys.stderr.write(f"[ASR Worker] Loading local model directory: {model_name}\n")
+        sys.stderr.flush()
+        model = WhisperModel(
+            model_name,
+            device=DEVICE,
+            compute_type=COMPUTE_TYPE,
+            cpu_threads=CPU_THREADS,
+            num_workers=NUM_WORKERS,
+        )
+        sys.stderr.write("[ASR Worker] Local model directory loaded successfully\n")
+        sys.stderr.flush()
+        return model
+
     # 首先尝试从 HuggingFace 加载
     try:
         sys.stderr.write(f"[ASR Worker] Trying to load from HuggingFace: {model_name}\n")

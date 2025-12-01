@@ -46,6 +46,40 @@ function directorySize(targetPath) {
   return total;
 }
 
+function getModelScopeRepoPath(cacheDir, repoId) {
+  if (!repoId || !cacheDir) {
+    return null;
+  }
+  const repoSegments = repoId.split(/[\\/]/).filter(Boolean);
+  if (repoSegments.length === 0) {
+    return null;
+  }
+  const baseCandidates = [
+    cacheDir,
+    path.join(cacheDir, 'models'),
+    path.join(cacheDir, 'hub'),
+    path.join(cacheDir, 'hub', 'models'),
+    path.join(cacheDir, 'modelscope'),
+    path.join(cacheDir, 'modelscope', 'hub'),
+    path.join(cacheDir, 'modelscope', 'hub', 'models'),
+  ];
+  const uniqueBases = [...new Set(baseCandidates)];
+  for (const basePath of uniqueBases) {
+    try {
+      if (!fs.existsSync(basePath)) {
+        continue;
+      }
+    } catch {
+      continue;
+    }
+    const candidate = path.join(basePath, ...repoSegments);
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
 export default class ASRModelManager extends EventEmitter {
   constructor() {
     super();
@@ -116,6 +150,14 @@ export default class ASRModelManager extends EventEmitter {
 
       if (!fs.existsSync(repoRoot)) {
         console.log(`[ASR ModelManager] Path does not exist: ${repoRoot}`);
+        // 如果没在 HF 目录里找到，尝试 ModelScope 直接目录
+        if (preset.modelScopeRepoId) {
+          const msPath = getModelScopeRepoPath(cacheDir, preset.modelScopeRepoId);
+          if (msPath) {
+            console.log(`[ASR ModelManager] Found ModelScope path: ${msPath}`);
+            return msPath;
+          }
+        }
         continue;
       }
 
@@ -206,21 +248,19 @@ export default class ASRModelManager extends EventEmitter {
     if (preset.modelScopeRepoId) {
       // Try all cache directories for ModelScope models
       for (const cacheDir of this.cacheDirs) {
-        const msRepoPath = path.join(cacheDir, preset.modelScopeRepoId);
-        if (fs.existsSync(msRepoPath)) {
-          // Check if it looks like a valid model directory (has config.json or model.bin)
-          if (fs.existsSync(path.join(msRepoPath, 'config.json')) || fs.existsSync(path.join(msRepoPath, 'model.bin'))) {
-            msSnapshotPath = msRepoPath;
-            msDownloadedBytes = directorySize(msSnapshotPath);
-            try {
-              const stat = fs.statSync(msSnapshotPath);
-              msUpdatedAt = stat.mtimeMs;
-            } catch {
-              msUpdatedAt = null;
-            }
-            break; // Found it, stop searching
-          }
+        const msRepoPath = getModelScopeRepoPath(cacheDir, preset.modelScopeRepoId);
+        if (!msRepoPath) {
+          continue;
         }
+        msSnapshotPath = msRepoPath;
+        msDownloadedBytes = directorySize(msSnapshotPath);
+        try {
+          const stat = fs.statSync(msSnapshotPath);
+          msUpdatedAt = stat.mtimeMs;
+        } catch {
+          msUpdatedAt = null;
+        }
+        break; // Found it, stop searching
       }
     }
 
@@ -234,10 +274,19 @@ export default class ASRModelManager extends EventEmitter {
 
     // Relaxed check: if we have > 10MB and (model.bin or config.json exists), consider it downloaded
     // or if size is > 90% of target
-    const hasCriticalFiles = snapshotPath && (
-      fs.existsSync(path.join(snapshotPath, 'config.json')) ||
-      fs.existsSync(path.join(snapshotPath, 'model.bin'))
-    );
+    const hasCriticalFiles = snapshotPath && ([
+      'config.json',
+      'configuration.json',
+      'config.yaml',
+      'model.bin',
+      'model.pt'
+    ].some((fileName) => {
+      try {
+        return fs.existsSync(path.join(snapshotPath, fileName));
+      } catch {
+        return false;
+      }
+    }));
 
     const isDownloaded = (targetSize > 0 && downloadedBytes >= targetSize * 0.9) ||
       (hasCriticalFiles && downloadedBytes > 10 * 1024 * 1024);

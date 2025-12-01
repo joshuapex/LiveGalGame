@@ -34,12 +34,14 @@ class ASRManager {
     // 【VAD相关】静音检测配置
     this.silenceTimers = new Map(); // sourceId -> timer
     this.SILENCE_TIMEOUT = 1200; // 默认 1.2s 静音判定，后续读取配置
-    this.MIN_SENTENCE_LENGTH = 6; // 最短落地字符数，避免噪音片段
+    this.MIN_SENTENCE_LENGTH = 1; // 允许短句保留
+    this.MIN_PUNCTUATION_LENGTH = 4; // 标点服务的最小字符数
     this.isSpeaking = false;
 
     // 【当前分段会话】追踪每个 sourceId 的当前消息（UPSERT 机制）
     // 解决 WhisperLiveKit 发送累积结果导致重复 INSERT 的问题
     this.currentSegments = new Map(); // sourceId -> { messageId, recordId, lastText }
+    this.streamingSegments = new Map(); // sourceId -> latest partial text
 
     logger.log('ASRManager created');
   }
@@ -97,8 +99,8 @@ class ASRManager {
       logger.log(`Silence timeout set to ${this.SILENCE_TIMEOUT}ms based on sentence_pause_threshold=${pauseThresholdSec}`);
 
 
-      // 确定模型名称：优先使用配置中的值，默认为 'medium' (Faster-Whisper)
-      const modelName = config.model_name || 'medium';
+      // 确定模型名称：优先使用配置中的值，默认为 'funasr-paraformer' (FunASR)
+      const modelName = config.model_name || 'funasr-paraformer';
       logger.log(`Selected ASR model: ${modelName}`);
 
       // 初始化 Whisper 服务
@@ -172,18 +174,17 @@ class ASRManager {
 
         // 检查文本是否有效（过滤掉空文本、纯标点、过短文本）
         const trimmedText = result.text.trim();
-        if (!trimmedText || trimmedText.length < 2 || /^[，。！？、；：\s]+$/.test(trimmedText)) {
+        if (!trimmedText) {
           logger.log(`跳过无效的识别结果: "${trimmedText}" (${sourceId})`);
           return null;
         }
 
+        const normalizedResult = this.normalizeText(trimmedText);
         const punctuatedText = await this.applyPunctuationIfAvailable(normalizedResult, sourceId);
         result.text = punctuatedText;
         const record = await this.saveRecognitionRecord(sourceId, result);
 
         // 添加到去重缓存
-        const normalizedResult = this.normalizeText(trimmedText);
-        result.text = normalizedResult;
         this.addToRecognitionCache(sourceId, punctuatedText, result.endTime);
 
         return {
@@ -281,6 +282,7 @@ class ASRManager {
     if (currentSegment) {
       logger.log(`[Commit Segment] Committing segment for ${sourceId}, message: ${currentSegment.messageId}`);
       this.currentSegments.delete(sourceId);
+      this.clearStreamingSegment(sourceId);
     }
   }
 
@@ -290,6 +292,35 @@ class ASRManager {
   commitAllSegments() {
     for (const sourceId of this.currentSegments.keys()) {
       this.commitCurrentSegment(sourceId);
+    }
+  }
+
+  emitStreamingUpdate(sourceId, text, timestamp) {
+    if (!sourceId || !text) {
+      return;
+    }
+    this.streamingSegments.set(sourceId, { text, timestamp });
+    if (this.eventEmitter) {
+      this.eventEmitter('asr-partial-update', {
+        sessionId: sourceId,
+        sourceId,
+        content: text,
+        timestamp,
+        conversationId: this.currentConversationId
+      });
+    }
+  }
+
+  clearStreamingSegment(sourceId) {
+    if (!sourceId || !this.streamingSegments.has(sourceId)) {
+      return;
+    }
+    this.streamingSegments.delete(sourceId);
+    if (this.eventEmitter) {
+      this.eventEmitter('asr-partial-clear', {
+        sessionId: sourceId,
+        sourceId
+      });
     }
   }
 
@@ -346,8 +377,8 @@ class ASRManager {
         }
         logger.log(`Punctuated text: "${punctuatedText}" (length: ${punctuatedText ? punctuatedText.length : 0})`);
 
-        if (!punctuatedText || punctuatedText.length < this.MIN_SENTENCE_LENGTH) {
-          logger.log(`Final sentence too short after normalization, skip saving: "${punctuatedText}" (min: ${this.MIN_SENTENCE_LENGTH})`);
+        if (!punctuatedText || !punctuatedText.trim()) {
+          logger.log(`Final sentence empty after normalization, skip saving: "${punctuatedText}"`);
           return null;
         }
 
@@ -412,7 +443,7 @@ class ASRManager {
 
       // 保存记录到数据库
       const normalizedText = this.normalizeText(result.text);
-      if (!normalizedText || normalizedText.length < this.MIN_SENTENCE_LENGTH) {
+      if (!normalizedText) {
         logger.log(`Normalized text did not pass validation, skip saving. Raw: "${result.text}"`);
         return null;
       }
@@ -653,8 +684,13 @@ class ASRManager {
 
   async applyPunctuationIfAvailable(text, sourceId) {
     const service = this.whisperService;
-    if (!service || typeof service.punctuateText !== 'function' || !text || text.length < this.MIN_SENTENCE_LENGTH) {
-      logger.log(`Skipping punctuation: service=${!!service}, hasMethod=${typeof service?.punctuateText === 'function'}, textLength=${text?.length || 0}, minLength=${this.MIN_SENTENCE_LENGTH}`);
+    if (
+      !service ||
+      typeof service.punctuateText !== 'function' ||
+      !text ||
+      text.length < this.MIN_PUNCTUATION_LENGTH
+    ) {
+      logger.log(`Skipping punctuation: service=${!!service}, hasMethod=${typeof service?.punctuateText === 'function'}, textLength=${text?.length || 0}, minLength=${this.MIN_PUNCTUATION_LENGTH}`);
       return text;
     }
 
@@ -708,8 +744,8 @@ class ASRManager {
         }
       }
 
-      if (!text || text.length < this.MIN_SENTENCE_LENGTH) {
-        logger.log(`[Sentence Complete] Text too short, skipping: "${text}" (min: ${this.MIN_SENTENCE_LENGTH})`);
+      if (!text || !text.trim()) {
+        logger.log('[Sentence Complete] Empty text, skipping.');
         // 如果是段落结束信号，仍然需要斩断
         if (isSegmentEnd) {
           this.commitCurrentSegment(sessionId);
@@ -719,8 +755,8 @@ class ASRManager {
 
       // 规范化文本
       const normalizedText = this.normalizeText(text);
-      if (!normalizedText || normalizedText.length < this.MIN_SENTENCE_LENGTH) {
-        logger.log(`[Sentence Complete] Normalized text too short: "${normalizedText}"`);
+      if (!normalizedText) {
+        logger.log('[Sentence Complete] Normalized text empty, skipping.');
         return null;
       }
 
@@ -765,6 +801,7 @@ class ASRManager {
 
         // 发送更新事件给渲染进程（使用 update 类型）
         if (this.eventEmitter) {
+          updatedMessage.source_id = sessionId;
           this.eventEmitter('asr-sentence-update', updatedMessage);
         }
 
@@ -772,11 +809,6 @@ class ASRManager {
       }
 
       // 检查是否是重复的识别结果（仅对新消息检查）
-      if (this.isDuplicateRecognition(sessionId, normalizedText, timestamp)) {
-        logger.log(`[Sentence Complete] Duplicate, skipping: "${normalizedText.substring(0, 30)}..."`);
-        return null;
-      }
-
       logger.log(`[Sentence Complete] Creating new message: "${normalizedText.substring(0, 50)}..." (trigger: ${trigger}, session: ${sessionId})`);
 
       // INSERT 新记录
@@ -800,6 +832,7 @@ class ASRManager {
 
       // 转换为消息
       const message = await this.convertRecordToMessage(record.id, this.currentConversationId);
+      message.source_id = sessionId;
       logger.log(`[Sentence Complete] Message created: ${message.id}`);
 
       // 【保存当前分段状态】后续更新将 UPDATE 这条消息
@@ -813,6 +846,7 @@ class ASRManager {
       // 发送事件给渲染进程（实时更新UI）
       if (this.eventEmitter) {
         logger.log(`[Sentence Complete] Sending event to renderer: ${message.id}`);
+        this.clearStreamingSegment(sessionId);
         this.eventEmitter('asr-sentence-complete', message);
       } else {
         logger.warn('[Sentence Complete] No event emitter set, UI will not update in real-time');
@@ -846,7 +880,12 @@ class ASRManager {
     try {
       const { sessionId, partialText, fullText, timestamp } = result;
 
-      if (!partialText) {
+      if (!partialText && !fullText) {
+        return;
+      }
+
+      const normalizedPartial = this.normalizeText(fullText || partialText || '');
+      if (!normalizedPartial) {
         return;
       }
 
@@ -861,8 +900,8 @@ class ASRManager {
       const timer = setTimeout(() => this.triggerSilenceCommit(sessionId), this.SILENCE_TIMEOUT);
       this.silenceTimers.set(sessionId, timer);
 
-      // 这里可以触发 UI 更新（通过 IPC 发送给渲染进程）
-      // logger.log(`[Partial] "${partialText}" (full: "${fullText?.substring(0, 30)}...")`);
+      const effectiveTimestamp = timestamp || Date.now();
+      this.emitStreamingUpdate(sessionId, normalizedPartial, effectiveTimestamp);
     } catch (error) {
       logger.error('[Partial Result] Error:', error);
     }

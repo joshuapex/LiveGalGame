@@ -3,7 +3,6 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { app } from 'electron';
-import { setTimeout as delay } from 'node:timers/promises';
 import * as logger from '../utils/logger.js';
 
 const PCM_SAMPLE_RATE = 16000;
@@ -17,9 +16,9 @@ function float32ToInt16Buffer(floatArray) {
   return Buffer.from(int16Array.buffer);
 }
 
-class LocalWhisperService {
+class FunASRService {
   constructor() {
-    this.modelName = 'medium';
+    this.modelName = 'funasr-paraformer';
     this.pythonPath = this.detectPythonPath();
     this.workerProcess = null;
     this.isInitialized = false;
@@ -27,7 +26,9 @@ class LocalWhisperService {
     this.onPartialResult = null;
     this.onServerCrash = null;
     this.retainAudioFiles = false;
-    this.silenceTimer = null;
+    this.workerReadyPromise = null;
+    this.workerReadyResolver = null;
+    this.workerReadyRejecter = null;
 
     this.tempDir = path.join(app.getPath('temp'), 'asr');
     if (!fs.existsSync(this.tempDir)) {
@@ -35,10 +36,10 @@ class LocalWhisperService {
     }
 
     const __dirname = path.dirname(fileURLToPath(import.meta.url));
-    this.workerScriptPath = path.join(__dirname, 'asr_worker.py');
+    this.workerScriptPath = path.join(__dirname, 'asr_funasr_worker.py');
 
-    logger.log(`[LocalWhisper] Python path: ${this.pythonPath}`);
-    logger.log(`[LocalWhisper] Worker script: ${this.workerScriptPath}`);
+    logger.log(`[FunASR] Python path: ${this.pythonPath}`);
+    logger.log(`[FunASR] Worker script: ${this.workerScriptPath}`);
   }
 
   setServerCrashCallback(callback) {
@@ -65,21 +66,39 @@ class LocalWhisperService {
     return 'python3';
   }
 
-  async initialize(modelName = 'medium', options = {}) {
+  async initialize(modelName = 'funasr-paraformer', options = {}) {
     if (this.isInitialized) return true;
 
     this.modelName = modelName || this.modelName;
     this.retainAudioFiles = options.retainAudioFiles || false;
     this.audioStoragePath = options.audioStoragePath || this.tempDir;
 
+    // 检查 Python 环境
+    await this.ensureFunASRInstalled();
+
     await this.startWorker();
     this.isInitialized = true;
-    logger.log('[LocalWhisper] Service initialized');
+    logger.log('[FunASR] Service initialized');
     return true;
+  }
+
+  async ensureFunASRInstalled() {
+    try {
+      await this.runPythonCommand(['-m', 'pip', 'show', 'funasr']);
+      return;
+    } catch {
+      logger.log('[FunASR] Installing funasr via pip...');
+      await this.runPythonCommand(['-m', 'pip', 'install', '--upgrade', 'funasr']);
+    }
   }
 
   async startWorker() {
     if (this.workerProcess) return;
+
+    this.workerReadyPromise = new Promise((resolve, reject) => {
+      this.workerReadyResolver = resolve;
+      this.workerReadyRejecter = reject;
+    });
 
     const args = [this.workerScriptPath];
 
@@ -91,7 +110,7 @@ class LocalWhisperService {
       PYTHONIOENCODING: 'utf-8'
     };
 
-    logger.log(`[LocalWhisper] Spawning worker: ${this.pythonPath} ${args.join(' ')}`);
+    logger.log(`[FunASR] Spawning worker: ${this.pythonPath} ${args.join(' ')}`);
 
     this.workerProcess = spawn(this.pythonPath, args, { env });
 
@@ -111,22 +130,27 @@ class LocalWhisperService {
 
     // 处理标准错误（日志）
     this.workerProcess.stderr.on('data', (data) => {
-      logger.log(`[LocalWhisper][Worker] ${data.toString().trim()}`);
+      logger.log(`[FunASR][Worker] ${data.toString().trim()}`);
     });
 
     this.workerProcess.on('close', (code) => {
-      logger.warn(`[LocalWhisper] Worker exited with code ${code}`);
+      logger.warn(`[FunASR] Worker exited with code ${code}`);
       this.workerProcess = null;
       this.isInitialized = false;
       if (this.onServerCrash) {
         this.onServerCrash(code);
       }
+      if (this.workerReadyRejecter) {
+        this.workerReadyRejecter(new Error(`Worker exited before ready (code ${code})`));
+        this.workerReadyRejecter = null;
+        this.workerReadyResolver = null;
+        this.workerReadyPromise = null;
+      }
     });
 
-    // 等待 Worker 就绪
-    // 这里简单等待一下，实际可以用 Promise 等待 "ready" 消息
-    // 但为了保持简单，假设启动成功
-    await delay(1000);
+    if (this.workerReadyPromise) {
+      await this.workerReadyPromise;
+    }
   }
 
   handleWorkerMessage(msg) {
@@ -152,9 +176,15 @@ class LocalWhisperService {
         });
       }
     } else if (msg.status === 'ready') {
-      logger.log('[LocalWhisper] Worker is ready');
+      logger.log('[FunASR] Worker is ready');
+      if (this.workerReadyResolver) {
+        this.workerReadyResolver();
+        this.workerReadyResolver = null;
+        this.workerReadyRejecter = null;
+        this.workerReadyPromise = null;
+      }
     } else if (msg.error) {
-      logger.error(`[LocalWhisper] Worker error: ${msg.error}`);
+      logger.error(`[FunASR] Worker error: ${msg.error}`);
     }
   }
 
@@ -163,22 +193,8 @@ class LocalWhisperService {
 
     if (!audioData || audioData.length === 0) return;
 
-    // 【优化】提高静音检测阈值，减少误触发
-    // 简单的静音检测（虽然 worker 也有 VAD）
-    if (this.detectSilence(audioData)) {
-      if (!this.silenceTimer) {
-        this.silenceTimer = setTimeout(() => {
-          this.forceCommitSentence(sourceId);
-          this.silenceTimer = null;
-        }, 1500); // 【优化】从700ms提高到1500ms，减少句子截断
-      }
-      return;
-    }
-
-    if (this.silenceTimer) {
-      clearTimeout(this.silenceTimer);
-      this.silenceTimer = null;
-    }
+    // 简单的静音检测
+    if (this.detectSilence(audioData)) return;
 
     const buffer = float32ToInt16Buffer(audioData);
     const base64Audio = buffer.toString('base64');
@@ -205,8 +221,7 @@ class LocalWhisperService {
       sum += Math.abs(audioData[i]);
     }
     const average = sum / audioData.length;
-    // 【优化】提高阈值，减少误判
-    return average < 0.003;
+    return average < 0.0015;
   }
 
   async forceCommitSentence(sourceId = 'default') {
@@ -241,7 +256,6 @@ class LocalWhisperService {
   }
 
   async saveAudioFile(audioData, recordId, conversationId, sourceId) {
-    // ... 复用 ASRService 的逻辑，或者简单实现 ...
     if (!this.retainAudioFiles) return null;
 
     const filename = `${recordId}_${sourceId}.wav`;
@@ -258,7 +272,6 @@ class LocalWhisperService {
   }
 
   createWavBuffer(audioData) {
-    // Copied from ASRService
     const numChannels = 1;
     const bitsPerSample = 16;
     const bytesPerSample = bitsPerSample / 8;
@@ -295,7 +308,35 @@ class LocalWhisperService {
       session_id: sourceId
     });
   }
+
+  runPythonCommand(args) {
+    return new Promise((resolve, reject) => {
+      const proc = spawn(this.pythonPath, args, {
+        env: {
+          ...process.env,
+          PYTHONUNBUFFERED: '1',
+        },
+      });
+
+      let stderr = '';
+
+      proc.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      proc.on('error', (error) => {
+        reject(error);
+      });
+
+      proc.on('close', (code) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(new Error(stderr || `Python command failed with exit code ${code}`));
+        }
+      });
+    });
+  }
 }
 
-export default LocalWhisperService;
-
+export default FunASRService;

@@ -60,7 +60,7 @@ function ASRSettings() {
   const [showAddConfig, setShowAddConfig] = useState(false);
   const [editingConfig, setEditingConfig] = useState(null);
 
-  // Faster-Whisper 模型
+  // ASR 模型（支持多引擎）
   const [modelPresets, setModelPresets] = useState([]);
   const [modelStatuses, setModelStatuses] = useState({});
   const [modelsLoading, setModelsLoading] = useState(true);
@@ -68,6 +68,21 @@ function ASRSettings() {
   const [activeModelId, setActiveModelId] = useState(null);
   const [savingModelId, setSavingModelId] = useState(null);
   const [downloadSource, setDownloadSource] = useState('huggingface');
+
+  // 按引擎分组模型
+  const modelsByEngine = modelPresets.reduce((acc, preset) => {
+    const engine = preset.engine || 'faster-whisper';
+    if (!acc[engine]) {
+      acc[engine] = [];
+    }
+    acc[engine].push(preset);
+    return acc;
+  }, {});
+
+  const engineNames = {
+    'funasr': 'FunASR',
+    'faster-whisper': 'Faster-Whisper'
+  };
 
   // 表单数据
   const [formData, setFormData] = useState({
@@ -253,6 +268,14 @@ function ASRSettings() {
       await api.asrUpdateConfig(asrDefaultConfig.id, { model_name: modelId });
       await loadASRConfigs();
       setActiveModelId(modelId);
+      api.asrReloadModel()
+        .then(() => {
+          alert('ASR 模型切换成功，后台已重新加载新模型，将在后续识别中生效。');
+        })
+        .catch((error) => {
+          console.error('重新加载 ASR 模型失败：', error);
+          alert('重新加载 ASR 模型失败：' + (error.message || '未知错误'));
+        });
     } catch (err) {
       console.error('设置默认模型失败：', err);
       alert('设置默认模型失败：' + (err.message || '未知错误'));
@@ -409,6 +432,7 @@ function ASRSettings() {
     const isActive = isPresetActive(preset, activeModelId);
     const updatedAt = status.updatedAt ? new Date(status.updatedAt).toLocaleString() : null;
     const progressVisible = totalBytes > 0 && (activeDownload || (downloadedBytes > 0 && !isDownloaded));
+    const engine = preset.engine || 'faster-whisper';
 
     return (
       <div
@@ -417,9 +441,23 @@ function ASRSettings() {
           }`}
       >
         <div className="flex items-start justify-between gap-4">
-          <div>
-            <h3 className="text-lg font-semibold text-gray-900">{preset.label}</h3>
+          <div className="flex-1">
+            <div className="flex items-center gap-2">
+              <h3 className="text-lg font-semibold text-gray-900">{preset.label}</h3>
+              <span className={`px-2 py-1 text-xs font-medium rounded-full ${
+                engine === 'funasr'
+                  ? 'bg-purple-100 text-purple-800'
+                  : 'bg-blue-100 text-blue-800'
+              }`}>
+                {engineNames[engine] || engine}
+              </span>
+            </div>
             <p className="mt-1 text-sm text-gray-600">{preset.description}</p>
+            {preset.language && (
+              <p className="mt-1 text-xs text-gray-500">
+                语言: {preset.language === 'zh' ? '中文' : preset.language === 'multilingual' ? '多语言' : preset.language}
+              </p>
+            )}
           </div>
           {isActive && (
             <span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-700">
@@ -534,7 +572,7 @@ function ASRSettings() {
       <div className="mb-8">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h2 className="text-xl font-semibold text-gray-900">Faster-Whisper 模型管理</h2>
+            <h2 className="text-xl font-semibold text-gray-900">ASR 模型管理</h2>
             <p className="text-sm text-gray-600 mt-1">
               选择适合设备性能的模型，查看本地缓存状态，并监控下载速度
             </p>
@@ -578,7 +616,7 @@ function ASRSettings() {
 
         {modelsLoading ? (
           <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {[...Array(3)].map((_, index) => (
+            {[...Array(6)].map((_, index) => (
               <div
                 key={index}
                 className="h-48 animate-pulse rounded-2xl border border-gray-200 bg-gray-100"
@@ -587,11 +625,22 @@ function ASRSettings() {
           </div>
         ) : modelPresets.length === 0 ? (
           <div className="mt-6 rounded-lg border-2 border-dashed border-gray-200 p-8 text-center text-gray-500">
-            暂无可用的 Faster-Whisper 模型预设
+            暂无可用的 ASR 模型预设
           </div>
         ) : (
-          <div className="mt-6 grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-            {modelPresets.map((preset) => renderModelCard(preset))}
+          <div className="mt-6 space-y-8">
+            {Object.entries(modelsByEngine).map(([engine, presets]) => (
+              <div key={engine} className="space-y-4">
+                <div className="flex items-center gap-3">
+                  <h3 className="text-lg font-semibold text-gray-900">
+                    {engineNames[engine] || engine}
+                  </h3>
+                </div>
+                <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+                  {presets.map((preset) => renderModelCard(preset))}
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </div>
@@ -652,11 +701,6 @@ function ASRSettings() {
                       <h3 className="text-lg font-medium text-gray-900">
                         {config.model_name}
                       </h3>
-                      {config.is_default === 1 && (
-                        <span className="ml-2 px-2 py-1 text-xs font-medium bg-blue-100 text-blue-800 rounded-full">
-                          默认
-                        </span>
-                      )}
                     </div>
                     <div className="mt-1 text-sm text-gray-600">
                       <p>语言: {config.language === 'zh' ? '中文' : config.language}</p>

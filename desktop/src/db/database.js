@@ -1763,7 +1763,7 @@ class DatabaseManager {
         console.log('No ASR config found, creating default config...');
 
         const defaultConfig = {
-          model_name: 'medium',
+          model_name: 'funasr-paraformer',
           language: 'zh',
           enable_vad: 1,
           sentence_pause_threshold: 1.0,
