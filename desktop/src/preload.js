@@ -78,15 +78,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   testLLMConnection: (configData) => ipcRenderer.invoke('llm-test-connection', configData),
   setDefaultLLMConfig: (id) => ipcRenderer.invoke('llm-set-default-config', id),
 
-  // Agent / LLM 推理
-  agentRun: (payload) => ipcRenderer.invoke('agent-run', payload),
-  agentRunStream: (payload) => ipcRenderer.invoke('agent-run-stream', payload),
-  onAgentStream: (callback) => {
-    const listener = (event, data) => callback(data);
-    ipcRenderer.on('agent-stream', listener);
-    return () => ipcRenderer.removeListener('agent-stream', listener);
-  },
-
   // ASR（语音识别）API
   asrInitialize: (conversationId) => ipcRenderer.invoke('asr-initialize', conversationId),
   asrCheckReady: () => ipcRenderer.invoke('asr-check-ready'),

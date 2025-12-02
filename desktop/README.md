@@ -73,18 +73,12 @@
 git clone https://github.com/JStone2934/LiveGalGame.git
 cd LiveGalGame/desktop
 pnpm install
-# 为 Electron 原生依赖编译本机二进制
-pnpm exec electron-builder install-app-deps
 ```
 
-### 配置语音识别 (ASR)
-
-当前开箱即用路线：**Faster‑Whisper Medium**（WhisperLiveKit 主服务，失败时自动回退本地 faster‑whisper worker）。直接 `pnpm dev` 即可，无需额外环境变量。
-
-> 说明：仓库保留了 FunASR / whisper.cpp 的安装脚本，方便后续扩展；目前运行时不会自动切到 FunASR，`WHISPER_IMPL` 环境变量暂未生效。
+### 配置语音识别
 
 ```bash
-# 可选预备：安装 FunASR（如需更好中文识别，未来接入可复用）
+# 安装 FunASR（推荐，中文识别效果最好）
 npm run setup-funasr
 ```
 
@@ -129,6 +123,6 @@ pnpm dev
 - `src/renderer/` - React 前端界面
 - `src/asr/` - 语音识别服务
 - `src/db/` - 本地数据存储
-- `src/agent/` & `agent-dev.md` - Agent 占位实现与开发指南
 
 欢迎提交 PR！有问题请加 QQ 群：**1074602400**
+
