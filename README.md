@@ -97,6 +97,16 @@
 
 [查看桌面端详细文档](./desktop/README.md)
 
+### 桌面版界面
+以下为桌面端应用界面截图：
+
+1. **主界面**：可以在聊天过程中看到实时字幕及对话选项，帮助你保持 GalGame 节奏。
+<img width="100%" alt="桌面端界面 1" src="./desktop/docs/images/iwEdAqNwbmcDAQTRC0wF0QZmBrBJU3uUrci3xwkKJkQ2yLEBB9MAAAABVTtvOAgACaJpbQoAC9IAGo-x.png" />
+2. **配置LLM**：在这里选择你自己的模型，作为你的助手。
+<img width="100%" alt="桌面端界面 2" src="./desktop/docs/images/iwEcAqNwbmcDAQTRCWAF0QZABrCeJHHnYHS-2AkKJkQ2yLECB9MAAAABVTtvOAgACaJpbQoAC9IABCUe.png" />
+3. **轨迹记录**：记录对话历史与好感度变化，使你随时回顾并优化聊天策略。
+<img width="100%" alt="桌面端界面 3" src="./desktop/docs/images/07BF93BD-4390-4F52-A3DA-1BEBF18FB8F0.png" />
+
 ---
 
 ## 🎬 演示视频
