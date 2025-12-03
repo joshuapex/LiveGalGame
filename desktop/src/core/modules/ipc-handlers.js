@@ -2,6 +2,7 @@ import electron from 'electron';
 import DatabaseManager from '../../db/database.js';
 import ASRManager from '../../asr/asr-manager.js';
 import ASRModelManager from '../../asr/model-manager.js';
+import LLMSuggestionService from './llm-suggestion-service.js';
 
 const { ipcMain, systemPreferences } = electron;
 
@@ -14,6 +15,7 @@ export class IPCManager {
     this.db = null;
     this.modelManager = null;
     this.asrManager = null;
+    this.llmSuggestionService = null;
     this.asrModelPreloading = false;
     this.asrModelPreloaded = false;
     this.asrServerCrashCallback = null;
@@ -52,21 +54,32 @@ export class IPCManager {
   }
 
   /**
+   * 初始化 LLM 建议服务
+   */
+  initLLMSuggestionService() {
+    if (!this.llmSuggestionService) {
+      this.llmSuggestionService = new LLMSuggestionService(() => this.db);
+    }
+  }
+
+  /**
    * 注册所有 IPC 处理器
    */
   registerHandlers() {
-    console.log('Registering IPC handlers...');
+    console.log('[IPCHandlers] Registering IPC handlers...');
 
     this.initDatabase();
     this.initModelManager();
+    this.initLLMSuggestionService();
     this.setupWindowHandlers();
     this.setupDatabaseHandlers();
     this.setupLLMHandlers();
+    this.setupSuggestionHandlers();
     this.setupASRModelHandlers();
     this.setupASRAudioHandlers();
     this.setupMediaHandlers();
 
-    console.log('All IPC handlers registered');
+    console.log('[IPCHandlers] All IPC handlers registered successfully');
   }
 
   /**
@@ -426,6 +439,114 @@ export class IPCManager {
     });
 
     console.log('LLM IPC handlers registered');
+  }
+
+  /**
+   * 设置 LLM 建议相关 IPC 处理器
+   */
+  setupSuggestionHandlers() {
+    // 获取建议配置
+    ipcMain.handle('suggestion-get-config', () => {
+      try {
+        return this.db.getSuggestionConfig();
+      } catch (error) {
+        console.error('Error getting suggestion config:', error);
+        return null;
+      }
+    });
+
+    // 更新建议配置
+    ipcMain.handle('suggestion-update-config', (event, updates) => {
+      try {
+        return this.db.updateSuggestionConfig(updates);
+      } catch (error) {
+        console.error('Error updating suggestion config:', error);
+        throw error;
+      }
+    });
+
+    // 生成对话建议
+    ipcMain.handle('llm-generate-suggestions', async (event, payload = {}) => {
+      try {
+        if (!this.llmSuggestionService) {
+          this.initLLMSuggestionService();
+        }
+        return await this.llmSuggestionService.generateSuggestions(payload);
+      } catch (error) {
+        console.error('Error generating LLM suggestions:', error);
+        throw error;
+      }
+    });
+
+    ipcMain.on('llm-start-suggestion-stream', async (event, payload = {}) => {
+      console.log('[IPCHandlers] Received llm-start-suggestion-stream request:', payload);
+      const webContents = event.sender;
+      const streamId = payload.streamId || `llm-suggestion-stream-${Date.now()}`;
+      console.log(`[IPCHandlers] Assigned streamId: ${streamId}`);
+
+      const send = (channel, data) => {
+        console.log(`[IPCHandlers] Sending to renderer: ${channel}`, { streamId, ...data });
+        if (webContents.isDestroyed()) {
+          console.warn('[IPCHandlers] WebContents destroyed, cannot send event');
+          return;
+        }
+        webContents.send(channel, { streamId, ...data });
+      };
+
+      try {
+        console.log('[IPCHandlers] Initializing LLM suggestion service');
+        if (!this.llmSuggestionService) {
+          this.initLLMSuggestionService();
+        }
+
+        console.log('[IPCHandlers] Starting streaming suggestion generation');
+        await this.llmSuggestionService.generateSuggestionsStream(payload, {
+          onStart: (info) => {
+            console.log('[IPCHandlers] onStart callback triggered:', info);
+            send('llm-suggestion-stream-start', info);
+          },
+          onHeader: (header) => {
+            console.log('[IPCHandlers] onHeader callback triggered:', header);
+            send('llm-suggestion-stream-header', header);
+          },
+          onSuggestion: (suggestion) => {
+            console.log('[IPCHandlers] onSuggestion callback triggered:', suggestion);
+            send('llm-suggestion-stream-chunk', { suggestion });
+          },
+          onParserError: (error) => {
+            console.error('[IPCHandlers] onParserError callback triggered:', error);
+            send('llm-suggestion-stream-error', { error: error.message || 'TOON解析失败' });
+          },
+          onComplete: (metadata) => {
+            console.log('[IPCHandlers] onComplete callback triggered:', metadata);
+            send('llm-suggestion-stream-end', { success: true, metadata });
+          },
+          onError: (error) => {
+            console.error('[IPCHandlers] onError callback triggered:', error);
+            send('llm-suggestion-stream-error', { error: error.message || '生成失败' });
+          }
+        });
+        console.log('[IPCHandlers] Streaming suggestion generation completed successfully');
+      } catch (error) {
+        console.error('[IPCHandlers] Error in streaming suggestion generation:', error);
+        send('llm-suggestion-stream-error', { error: error.message || '生成失败' });
+      }
+    });
+
+    // 话题转变检测
+    ipcMain.handle('llm-detect-topic-shift', async (event, payload = {}) => {
+      try {
+        if (!this.llmSuggestionService) {
+          this.initLLMSuggestionService();
+        }
+        return await this.llmSuggestionService.detectTopicShift(payload);
+      } catch (error) {
+        console.error('Error detecting topic shift:', error);
+        throw error;
+      }
+    });
+
+    console.log('[IPCHandlers] Suggestion handlers registered');
   }
 
   /**

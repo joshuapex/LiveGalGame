@@ -98,10 +98,25 @@ CREATE TABLE IF NOT EXISTS character_details (
 CREATE TABLE IF NOT EXISTS llm_configs (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL, -- 配置名称
-  provider TEXT NOT NULL DEFAULT 'openai', -- 提供商（openai等）
   api_key TEXT NOT NULL, -- API密钥
   base_url TEXT, -- API基础URL（可选，默认使用提供商的标准URL）
+  model_name TEXT NOT NULL DEFAULT 'gpt-4o-mini', -- 模型名称
   is_default INTEGER DEFAULT 0, -- 是否为默认配置
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+-- 对话建议配置表
+CREATE TABLE IF NOT EXISTS suggestion_configs (
+  id TEXT PRIMARY KEY,
+  enable_passive_suggestion INTEGER DEFAULT 1,
+  suggestion_count INTEGER DEFAULT 3,
+  silence_threshold_seconds INTEGER DEFAULT 3,
+  message_threshold_count INTEGER DEFAULT 3,
+  cooldown_seconds INTEGER DEFAULT 30,
+  context_message_limit INTEGER DEFAULT 10,
+  topic_detection_enabled INTEGER DEFAULT 0,
+  model_name TEXT DEFAULT 'gpt-4o-mini',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );

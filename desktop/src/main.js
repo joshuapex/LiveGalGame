@@ -166,7 +166,9 @@ app.whenReady().then(async () => {
   initializeManagers();
 
   // 注册 IPC 处理器
+  console.log('[Main] Registering IPC handlers...');
   ipcManager.registerHandlers();
+  console.log('[Main] IPC handlers registered successfully');
 
   // 注册桌面捕获器
   registerDesktopCapturer();

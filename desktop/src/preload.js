@@ -77,6 +77,42 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteLLMConfig: (id) => ipcRenderer.invoke('llm-delete-config', id),
   testLLMConnection: (configData) => ipcRenderer.invoke('llm-test-connection', configData),
   setDefaultLLMConfig: (id) => ipcRenderer.invoke('llm-set-default-config', id),
+  generateLLMSuggestions: (payload) => ipcRenderer.invoke('llm-generate-suggestions', payload),
+  detectTopicShift: (payload) => ipcRenderer.invoke('llm-detect-topic-shift', payload),
+  startSuggestionStream: (payload) => {
+    console.log('[Preload] Sending llm-start-suggestion-stream:', payload);
+    ipcRenderer.send('llm-start-suggestion-stream', payload);
+    console.log('[Preload] llm-start-suggestion-stream sent successfully');
+  },
+  onSuggestionStreamStart: (callback) => {
+    const listener = (event, data) => callback(data);
+    ipcRenderer.on('llm-suggestion-stream-start', listener);
+    return () => ipcRenderer.removeListener('llm-suggestion-stream-start', listener);
+  },
+  onSuggestionStreamHeader: (callback) => {
+    const listener = (event, data) => callback(data);
+    ipcRenderer.on('llm-suggestion-stream-header', listener);
+    return () => ipcRenderer.removeListener('llm-suggestion-stream-header', listener);
+  },
+  onSuggestionStreamChunk: (callback) => {
+    const listener = (event, data) => callback(data);
+    ipcRenderer.on('llm-suggestion-stream-chunk', listener);
+    return () => ipcRenderer.removeListener('llm-suggestion-stream-chunk', listener);
+  },
+  onSuggestionStreamEnd: (callback) => {
+    const listener = (event, data) => callback(data);
+    ipcRenderer.on('llm-suggestion-stream-end', listener);
+    return () => ipcRenderer.removeListener('llm-suggestion-stream-end', listener);
+  },
+  onSuggestionStreamError: (callback) => {
+    const listener = (event, data) => callback(data);
+    ipcRenderer.on('llm-suggestion-stream-error', listener);
+    return () => ipcRenderer.removeListener('llm-suggestion-stream-error', listener);
+  },
+
+  // 对话建议配置
+  getSuggestionConfig: () => ipcRenderer.invoke('suggestion-get-config'),
+  updateSuggestionConfig: (updates) => ipcRenderer.invoke('suggestion-update-config', updates),
 
   // ASR（语音识别）API
   asrInitialize: (conversationId) => ipcRenderer.invoke('asr-initialize', conversationId),
@@ -139,4 +175,8 @@ ipcRenderer.on('window-focused', () => {
   logger.log('Window focused');
 });
 
+console.log('[Preload] Preload script loaded successfully, exposing APIs:', {
+  hasStartSuggestionStream: !!window.electronAPI?.startSuggestionStream,
+  hasSuggestionStreamEvents: !!window.electronAPI?.onSuggestionStreamStart
+});
 logger.log('Preload script loaded successfully');
