@@ -27,4 +27,5 @@ signing.properties
 /desktop/data
 /desktop/.temp
 /desktop/tests
+desktop/src/data
 .cursor

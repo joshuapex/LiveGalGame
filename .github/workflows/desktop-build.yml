@@ -28,18 +28,21 @@ jobs:
           - os: macos-14
             platform: mac
             arch: arm64
+            python: python3.10
             artifact_path: |
               desktop/dist/*.dmg
               desktop/dist/*.zip
           - os: macos-13
             platform: mac
             arch: x64
+            python: python3.10
             artifact_path: |
               desktop/dist/*.dmg
               desktop/dist/*.zip
           - os: windows-latest
             platform: win
             arch: x64
+            python: python
             artifact_path: |
               desktop/dist/*.exe
 
@@ -82,7 +85,7 @@ jobs:
 
       - name: Build desktop package
         env:
-          PYTHON: python3.10
+          PYTHON: ${{ matrix.python }}
           ASR_IMPL: funasr
         run: |
           if [ "${{ matrix.platform }}" = "mac" ]; then
