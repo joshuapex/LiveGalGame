@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { app } from 'electron';
 
 // 获取 __dirname 的 ESM 等效方式
 const __filename = fileURLToPath(import.meta.url);
@@ -11,10 +12,34 @@ export default class DatabaseBase {
   constructor(options = {}) {
     // 数据库文件路径
     const customPath = options.dbPath || process.env.LIVEGALGAME_DB_PATH;
-    const resolvedPath = customPath
+    const isPackaged = app?.isPackaged;
+
+    // 默认使用用户数据目录，若开发环境则使用仓库内 data
+    const defaultDbPath = customPath
       ? path.resolve(customPath)
-      : path.join(__dirname, '../../data/livegalgame.db');
-    this.dbPath = resolvedPath;
+      : isPackaged
+        ? path.join(app.getPath('userData'), 'livegalgame.db')
+        : path.join(__dirname, '../../data/livegalgame.db');
+
+    this.dbPath = defaultDbPath;
+
+    // 打包后首次运行：从内置 seed DB 复制到用户目录
+    if (isPackaged && !fs.existsSync(this.dbPath)) {
+      const resourceSeed = process.resourcesPath
+        ? path.join(process.resourcesPath, 'data', 'livegalgame.db')
+        : null;
+      const asarSeed = path.join(app.getAppPath(), 'data', 'livegalgame.db');
+      const seedDb = (resourceSeed && fs.existsSync(resourceSeed))
+        ? resourceSeed
+        : asarSeed;
+
+      if (seedDb && fs.existsSync(seedDb)) {
+        const dataDir = path.dirname(this.dbPath);
+        fs.mkdirSync(dataDir, { recursive: true });
+        fs.copyFileSync(seedDb, this.dbPath);
+        console.log(`[DB] seeded database to ${this.dbPath}`);
+      }
+    }
 
     // 确保data目录存在
     const dataDir = path.dirname(this.dbPath);

@@ -19,11 +19,12 @@
     "rebuild:better-sqlite3": "electron-rebuild -f -w better-sqlite3",
     "rebuild:native": "electron-rebuild -f -w system_audio_capture",
     "postinstall": "pnpm run rebuild:better-sqlite3",
-    "prebuild": "npm run download-ggml-models",
-    "build": "vite build && electron-builder",
+    "prepare:python": "node scripts/prepare-python-env.js",
+    "prebuild": "node scripts/prebuild.js",
+    "build": "npm run prebuild && vite build && electron-builder",
     "build:vite": "vite build",
-    "build:win": "vite build && electron-builder --win",
-    "build:mac": "vite build && electron-builder --mac",
+    "build:win": "npm run prebuild && vite build && electron-builder --win",
+    "build:mac": "npm run prebuild && vite build && electron-builder --mac",
     "preview": "vite preview",
     "test:asr": "cross-env NODE_ENV=test ALL_PROXY=socks5h://127.0.0.1:13659 LIVEGALGAME_DB_PATH=./data/test-livegalgame.db electron tests/asr-pipeline.test.js",
     "test:settings-logs": "electron tests/test-settings-system-audio-logs.js",
@@ -79,6 +80,7 @@
     },
     "files": [
       "dist/renderer/**/*",
+      "data/**/*",
       "src/main.js",
       "src/preload.js",
       "src/db/**/*",
@@ -87,6 +89,16 @@
       "models/**/*",
       "third_party/whisper.cpp/examples/addon.node/build/**/*",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "python-env",
+        "to": "python-env"
+      },
+      {
+        "from": "data",
+        "to": "data"
+      }
     ],
     "mac": {
       "category": "public.app-category.productivity"
