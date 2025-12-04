@@ -1,9 +1,29 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
+import { performance } from 'node:perf_hooks';
+
+// 开发服务器耗时日志
+const devPerfPlugin = () => {
+  const start = performance.now();
+  return {
+    name: 'dev-perf-logger',
+    apply: 'serve',
+    configResolved() {
+      const cost = (performance.now() - start).toFixed(1);
+      console.log(`[VitePerf] configResolved: ${cost}ms`);
+    },
+    configureServer(server) {
+      server.httpServer?.once('listening', () => {
+        const cost = (performance.now() - start).toFixed(1);
+        console.log(`[VitePerf] dev server listening: ${cost}ms`);
+      });
+    }
+  };
+};
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), devPerfPlugin()],
   base: './',
   // 指定根目录为 src/renderer，这样 Vite 就能找到 index.html 和 hud.html
   root: path.resolve(__dirname, 'src/renderer'),

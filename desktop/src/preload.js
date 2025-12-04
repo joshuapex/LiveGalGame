@@ -99,6 +99,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('llm-suggestion-stream-chunk', listener);
     return () => ipcRenderer.removeListener('llm-suggestion-stream-chunk', listener);
   },
+  onSuggestionStreamPartial: (callback) => {
+    const listener = (event, data) => callback(data);
+    ipcRenderer.on('llm-suggestion-stream-partial', listener);
+    return () => ipcRenderer.removeListener('llm-suggestion-stream-partial', listener);
+  },
   onSuggestionStreamEnd: (callback) => {
     const listener = (event, data) => callback(data);
     ipcRenderer.on('llm-suggestion-stream-end', listener);

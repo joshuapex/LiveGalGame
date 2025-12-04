@@ -2,9 +2,27 @@ const HEADER_REGEX = /^suggestions\[(\d+)\]\{([^}]+)\}:\s*$/i;
 
 const STRING_QUOTES = /^["']|["']$/g;
 
-const DEFAULT_FIELDS = ['title', 'content', 'tags', 'affinity_hint'];
+const DEFAULT_FIELDS = ['suggestion', 'tags'];
 
 const normalizeValue = (value = '') => value.replace(STRING_QUOTES, '').trim();
+
+// 针对 suggestion/tags，取“最后一个未被引号包裹的逗号（中/英文）”作为分隔
+const splitByLastDelimiter = (line) => {
+  let inQuotes = false;
+  let lastIndex = -1;
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i];
+    if (char === '"' && line[i - 1] !== '\\') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+    if (!inQuotes && (char === ',' || char === '，')) {
+      lastIndex = i;
+    }
+  }
+  if (lastIndex === -1) return [line];
+  return [line.slice(0, lastIndex), line.slice(lastIndex + 1)];
+};
 
 const parseTags = (raw) => {
   if (!raw) return [];
@@ -26,28 +44,31 @@ const csvSplit = (line) => {
       inQuotes = !inQuotes;
       continue;
     }
-    if (char === ',' && !inQuotes) {
+    if ((char === ',' || char === '，') && !inQuotes) {
       result.push(current);
       current = '';
       continue;
     }
     current += char;
   }
-  if (current !== '' || line.endsWith(',')) {
+  if (current !== '' || line.endsWith(',') || line.endsWith('，')) {
     result.push(current);
   }
   return result;
 };
 
 export class ToonSuggestionStreamParser {
-  constructor({ onHeader, onSuggestion, onError } = {}) {
+  constructor({ onHeader, onSuggestion, onPartialSuggestion, onError } = {}) {
     this.onHeader = onHeader;
     this.onSuggestion = onSuggestion;
+    this.onPartialSuggestion = onPartialSuggestion;
     this.onError = onError;
     this.buffer = '';
     this.headerParsed = false;
     this.expectedCount = null;
     this.fields = DEFAULT_FIELDS;
+    this.headerSkipCount = 0;
+    this.MAX_HEADER_SKIP = 5;
   }
 
   push(chunk) {
@@ -69,6 +90,17 @@ export class ToonSuggestionStreamParser {
       this.processLine(line);
       newlineIndex = this.buffer.indexOf('\n');
     }
+    // 将当前未结束的行以 partial 形式暴露，便于前端流式展示
+    if (typeof this.onPartialSuggestion === 'function') {
+      const partialLine = this.buffer.trim();
+      if (partialLine) {
+        this.onPartialSuggestion({
+          suggestion: normalizeValue(partialLine),
+          tags: []
+        });
+      }
+    }
+
     console.log(`[ToonSuggestionStreamParser] Remaining buffer (${this.buffer.length} chars): "${this.buffer}"`);
   }
 
@@ -90,6 +122,17 @@ export class ToonSuggestionStreamParser {
       console.log('[ToonSuggestionStreamParser] Skipping empty line');
       return;
     }
+    const lower = line.toLowerCase();
+    const normalizedToon = lower.replace(/[`]/g, '').replace(/\s/g, '');
+    if (
+      normalizedToon === 'toon' ||
+      (lower.startsWith('```') && lower.includes('toon')) ||
+      lower === '```toon' ||
+      lower.startsWith('toon```')
+    ) {
+      console.log('[ToonSuggestionStreamParser] Skipping code fence/toon marker line:', line);
+      return;
+    }
     if (!this.headerParsed) {
       console.log('[ToonSuggestionStreamParser] Header not parsed yet, parsing header');
       this.parseHeader(line);
@@ -103,7 +146,28 @@ export class ToonSuggestionStreamParser {
     console.log(`[ToonSuggestionStreamParser] Attempting to parse header: "${line}"`);
     const match = line.match(HEADER_REGEX);
     if (!match) {
-      console.error(`[ToonSuggestionStreamParser] Header format invalid: "${line}"`);
+      // 容忍若干行非表头文本（模型可能输出客套或提示语）
+      const shouldSkip =
+        /^```/.test(line) ||
+        /^(好的|以下|这里|结果|建议|总结|输出)/i.test(line) ||
+        /^(toon:?)$/i.test(line);
+      if (shouldSkip && this.headerSkipCount < this.MAX_HEADER_SKIP) {
+        this.headerSkipCount += 1;
+        console.warn(
+          `[ToonSuggestionStreamParser] Skipping non-header line (${this.headerSkipCount}/${this.MAX_HEADER_SKIP}): "${line}"`
+        );
+        return;
+      }
+
+      this.headerSkipCount += 1;
+      if (this.headerSkipCount <= this.MAX_HEADER_SKIP) {
+        console.warn(
+          `[ToonSuggestionStreamParser] Non-header line tolerated (${this.headerSkipCount}/${this.MAX_HEADER_SKIP}): "${line}"`
+        );
+        return;
+      }
+
+      console.error(`[ToonSuggestionStreamParser] Header format invalid after tolerance: "${line}"`);
       this.emitError(new Error(`TOON 表头格式不正确：${line}`));
       return;
     }
@@ -135,7 +199,24 @@ export class ToonSuggestionStreamParser {
 
   parseRow(line) {
     console.log(`[ToonSuggestionStreamParser] Parsing row: "${line}"`);
-    const values = csvSplit(line);
+
+    // 跳过纯分隔符/占位符行（如 ..., …, ---, ``` 等）
+    const symbolicOnly = line.trim().replace(/\s/g, '');
+    if (
+      !symbolicOnly ||
+      /^(```|---|—{2,}|\.{2,}|…+|={2,})$/i.test(symbolicOnly)
+    ) {
+      console.log('[ToonSuggestionStreamParser] Skipping non-content row:', line);
+      return;
+    }
+
+    const isSuggestionOnly =
+      this.fields.length === 2 &&
+      this.fields.includes('suggestion') &&
+      this.fields.includes('tags');
+
+    const values = isSuggestionOnly ? splitByLastDelimiter(line) : csvSplit(line);
+
     console.log(`[ToonSuggestionStreamParser] Parsed CSV values: [${values.map(v => `"${v}"`).join(', ')}]`);
 
     if (!values.length) {
@@ -151,10 +232,8 @@ export class ToonSuggestionStreamParser {
     console.log(`[ToonSuggestionStreamParser] Mapped suggestion:`, suggestion);
 
     const normalized = {
-      title: suggestion.title || `选项`,
-      content: suggestion.content || '',
-      tags: parseTags(suggestion.tags || suggestion.tag_list || ''),
-      affinity_hint: suggestion.affinity_hint || suggestion.affinity || null
+      suggestion: suggestion.suggestion || suggestion.title || suggestion.content || `选项`,
+      tags: parseTags(suggestion.tags || suggestion.tag_list || '')
     };
 
     console.log(`[ToonSuggestionStreamParser] Normalized suggestion:`, normalized);

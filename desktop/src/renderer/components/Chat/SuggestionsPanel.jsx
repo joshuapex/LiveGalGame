@@ -36,7 +36,7 @@ export const SuggestionsPanel = ({
             </span>
           )}
           <button
-            className="control-btn"
+            className="suggestion-action-btn"
             onClick={() => onGenerate({ trigger: 'manual', reason: 'manual' })}
             disabled={
               suggestionStatus === 'loading' ||
@@ -74,11 +74,32 @@ export const SuggestionsPanel = ({
             </p>
           </div>
         )}
-        {suggestions.map((suggestion) => (
-          <article className="suggestion-card" key={suggestion.id}>
-            <div className="suggestion-header">
-              <strong>{suggestion.title}</strong>
-              {suggestion.tags?.length > 0 && (
+        {suggestions.map((suggestion) => {
+          const showCombined =
+            !suggestion.content || suggestion.title === suggestion.content;
+          const mainText = suggestion.content || suggestion.title;
+          return (
+            <article className="suggestion-card" key={suggestion.id}>
+              {showCombined ? (
+                <p className="suggestion-body">{mainText}</p>
+              ) : (
+                <>
+                  <div className="suggestion-header">
+                    <strong>{suggestion.title}</strong>
+                    {suggestion.tags?.length > 0 && (
+                      <div className="suggestion-meta">
+                        {suggestion.tags.map((tag) => (
+                          <span className="suggestion-badge" key={`${suggestion.id}-${tag}`}>
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <p className="suggestion-body">{suggestion.content}</p>
+                </>
+              )}
+              {showCombined && suggestion.tags?.length > 0 && (
                 <div className="suggestion-meta">
                   {suggestion.tags.map((tag) => (
                     <span className="suggestion-badge" key={`${suggestion.id}-${tag}`}>
@@ -87,21 +108,9 @@ export const SuggestionsPanel = ({
                   ))}
                 </div>
               )}
-            </div>
-            <p className="suggestion-body">{suggestion.content}</p>
-            <div className="suggestion-meta">
-              {suggestion.affinity_hint && (
-                <span className="suggestion-hint">{suggestion.affinity_hint}</span>
-              )}
-              <button
-                className="suggestion-copy-btn"
-                onClick={() => onCopy(suggestion.id, suggestion.content)}
-              >
-                {copiedSuggestionId === suggestion.id ? '已复制' : '复制'}
-              </button>
-            </div>
-          </article>
-        ))}
+            </article>
+          );
+        })}
         {isStreaming && generatedCount > 0 && (!expectedCount || generatedCount < expectedCount) && (
           <div className="hud-status">
             <span className="hud-spinner" aria-hidden="true" />

@@ -1,27 +1,8 @@
-"""
-ASR Worker with Hybrid Sentence Segmentation
+# ASR Worker (Faster-Whisper)
+# 支持流式识别、滑动窗口和混合分句（partial/sentence_complete）。
 
-当前实现：基于 Faster-Whisper 的语音识别引擎
-支持流式识别和混合分句策略。
-
-【优化版本】
-核心改进：
-1. 滑动窗口识别 - 避免重复识别整个累积的音频
-2. 累积足够音频再识别 - 提高识别质量和标点准确性
-3. 增量文本提取 - 只输出新识别的部分
-4. 智能分句 - 基于标点和语义边界
-
-IPC 协议：
-- 输入：streaming_chunk, batch_file, reset_session, force_commit
-- 输出：
-  - partial: 实时字幕（增量文本）
-  - sentence_complete: 完整句子（触发存库）
-"""
-
-import base64
 import json
 import os
-import re
 import sys
 import time
 import traceback
@@ -31,6 +12,14 @@ from typing import Deque, Dict, List, Optional, Tuple
 
 import numpy as np
 from faster_whisper import WhisperModel
+
+from asr_utils import (
+    decode_audio_chunk,
+    extract_incremental_text,
+    generate_chinese_dialogue_prompt,
+    split_by_sentence_end,
+    transcribe_audio_with_segments,
+)
 
 # ==============================================================================
 # 核心修复：OS 级别的文件描述符重定向
@@ -276,93 +265,6 @@ class SessionState:
         self.completed_sentences.clear()
 
 
-def decode_audio_chunk(audio_b64: str) -> np.ndarray:
-    audio_bytes = base64.b64decode(audio_b64)
-    audio_int16 = np.frombuffer(audio_bytes, dtype=np.int16)
-    return audio_int16.astype(np.float32) / 32768.0
-
-
-def generate_chinese_dialogue_prompt(completed_sentences: List[str]) -> str:
-    """
-    生成固定的简体中文闲聊风格对话 Prompt，引导 Whisper 正确添加标点符号
-
-    使用固定的中文对话模板，包含丰富的标点和闲聊风格表达
-    """
-    # 固定的中文对话模板，包含丰富的标点和闲聊风格
-    fixed_prompt = """你好啊，今天怎么样？天气不错吧？
-嗯嗯，我觉得还可以啦。最近在忙什么呢？
-哈哈，原来是这样啊。那你有什么计划吗？
-哦，听起来挺有趣的！需要我帮忙吗？
-好的，没问题。我觉得这个主意不错。
-真的吗？那太好了！继续保持吧。
-哎呀，怎么会这样呢？有什么我能做的吗？
-嗯，我明白你的意思。生活有时候就是这样。
-哈哈，说得对！我们一起想想办法吧。
-好吧，那就这样决定啦。保持联系哦。"""
-
-    return fixed_prompt
-
-
-def extract_incremental_text(previous: str, current: str) -> str:
-    """提取增量文本（当前文本相对于之前文本的新增部分）"""
-    if not current:
-        return ""
-    if not previous:
-        return current
-    if current == previous or current in previous:
-        return ""
-    if previous in current:
-        return current[len(previous):]
-
-    # 尝试找到最长的重叠部分
-    max_overlap = min(len(previous), len(current))
-    for overlap in range(max_overlap, 0, -1):
-        if previous[-overlap:] == current[:overlap]:
-            return current[overlap:]
-    return current
-
-
-def find_sentence_boundaries(text: str) -> List[Tuple[int, str]]:
-    """
-    找到文本中的句子边界
-    返回: [(边界位置, 边界类型), ...]
-    边界类型: 'end' (句末), 'clause' (分句)
-    """
-    boundaries = []
-    for i, char in enumerate(text):
-        if char in SENTENCE_END_PUNCTUATION:
-            boundaries.append((i + 1, 'end'))
-        elif char in CLAUSE_PUNCTUATION:
-            boundaries.append((i + 1, 'clause'))
-    return boundaries
-
-
-def split_by_sentence_end(text: str) -> Tuple[List[str], str]:
-    """
-    按句末标点分割文本
-    返回: (完整句子列表, 剩余文本)
-    """
-    sentences = []
-    remaining = text
-    
-    # 使用正则匹配句末标点
-    pattern = r'([^。！？!?.；;]*[。！？!?.；;])'
-    matches = list(re.finditer(pattern, text))
-    
-    if not matches:
-        return [], text
-    
-    last_end = 0
-    for match in matches:
-        sentence = match.group(1).strip()
-        if sentence and len(sentence) >= MIN_SENTENCE_CHARS:
-            sentences.append(sentence)
-        last_end = match.end()
-    
-    remaining = text[last_end:].strip()
-    return sentences, remaining
-
-
 def load_model() -> WhisperModel:
     model_name = resolve_model_name()
     sys.stderr.write(f"[ASR Worker] Loading model: {model_name} (Faster-Whisper)\n")
@@ -450,46 +352,6 @@ def load_model() -> WhisperModel:
             raise hf_exc
 
 
-def transcribe_audio_with_segments(
-    model: WhisperModel, 
-    audio_source, 
-    initial_prompt: str = None
-) -> Tuple[str, List[dict], dict]:
-    """
-    转录音频并返回 segment 级别的信息
-    返回: (完整文本, segments列表, info)
-    """
-    segments, info = model.transcribe(
-        audio_source,
-        beam_size=BEAM_SIZE,
-        best_of=BEAM_SIZE,
-        language=LANGUAGE,
-        temperature=TEMPERATURE,
-        vad_filter=VAD_FILTER,
-        condition_on_previous_text=False,
-        initial_prompt=initial_prompt, # 【核心优化】传入上文提示
-        no_speech_threshold=NO_SPEECH_THRESHOLD,
-        word_timestamps=False,  # 关闭 word-level timestamps 以提高速度
-    )
-    
-    collected_segments = []
-    collected_text = []
-    
-    for segment in segments:
-        seg_text = segment.text.strip() if segment.text else ""
-        if seg_text:
-            collected_text.append(seg_text)
-            collected_segments.append({
-                "text": seg_text,
-                "start": float(segment.start),
-                "end": float(segment.end),
-                "no_speech_prob": float(segment.no_speech_prob) if hasattr(segment, 'no_speech_prob') else 0.0,
-            })
-    
-    full_text = "".join(collected_text).strip()
-    return full_text, collected_segments, info
-
-
 def handle_streaming_chunk(
     model: WhisperModel,
     data: Dict,
@@ -537,7 +399,17 @@ def handle_streaming_chunk(
     sys.stderr.write(f"[Worker] Prompt length: {len(initial_prompt)} chars\n")
 
     try:
-        full_text, segments, info = transcribe_audio_with_segments(model, audio_array, initial_prompt=initial_prompt)
+        full_text, segments, info = transcribe_audio_with_segments(
+            model,
+            audio_array,
+            initial_prompt=initial_prompt,
+            beam_size=BEAM_SIZE,
+            language=LANGUAGE,
+            temperature=TEMPERATURE,
+            vad_filter=VAD_FILTER,
+            no_speech_threshold=NO_SPEECH_THRESHOLD,
+            word_timestamps=False,
+        )
         sys.stderr.write(f"[Worker] Transcription result: text=\"{full_text[:50] if full_text else '(empty)'}...\", segments={len(segments)}\n")
         sys.stderr.flush()
     except Exception as exc:
@@ -574,7 +446,11 @@ def handle_streaming_chunk(
                 })
     
     # 2. 检测句末标点
-    complete_sentences, remaining_text = split_by_sentence_end(full_text)
+    complete_sentences, remaining_text = split_by_sentence_end(
+        full_text,
+        MIN_SENTENCE_CHARS,
+        SENTENCE_END_PUNCTUATION,
+    )
     
     # 3. 检查是否超过最大句子时长
     sentence_duration = (state.total_samples - state.sentence_start_sample) / SAMPLE_RATE
@@ -684,7 +560,16 @@ def handle_batch_file(model: WhisperModel, data: Dict):
         return
 
     try:
-        text, segments, info = transcribe_audio_with_segments(model, audio_path)
+        text, segments, info = transcribe_audio_with_segments(
+            model,
+            audio_path,
+            beam_size=BEAM_SIZE,
+            language=LANGUAGE,
+            temperature=TEMPERATURE,
+            vad_filter=VAD_FILTER,
+            no_speech_threshold=NO_SPEECH_THRESHOLD,
+            word_timestamps=False,
+        )
     except Exception as exc:
         send_ipc_message({
             "request_id": request_id,

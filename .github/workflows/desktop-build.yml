@@ -1,0 +1,93 @@
+name: Desktop Build
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/desktop-build.yml'
+  pull_request:
+    branches: [ main, master, feat/desktop-branch]
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/desktop-build.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Desktop ${{ matrix.platform }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            platform: mac
+            arch: arm64
+            artifact_path: |
+              desktop/dist/*-arm64*.dmg
+              desktop/dist/*-arm64*.zip
+          - os: macos-13
+            platform: mac
+            arch: x64
+            artifact_path: |
+              desktop/dist/*-x64*.dmg
+              desktop/dist/*-x64*.zip
+          - os: windows-latest
+            platform: win
+            arch: x64
+            artifact_path: |
+              desktop/dist/*Setup.exe
+              desktop/dist/*-x64*.exe
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: desktop
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Print app version
+        id: meta
+        run: echo "app_version=$(node -p \"require('./package.json').version\")" >> "$GITHUB_OUTPUT"
+
+      - name: Build desktop package
+        run: |
+          if [ "${{ matrix.platform }}" = "mac" ]; then
+            pnpm run build:mac -- --${{ matrix.arch }}
+          else
+            pnpm run build:win -- --${{ matrix.arch }}
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: livegalgame-desktop-${{ matrix.platform }}-${{ matrix.arch }}-v${{ steps.meta.outputs.app_version }}
+          path: ${{ matrix.artifact_path }}
+          if-no-files-found: error
+          retention-days: 14
+

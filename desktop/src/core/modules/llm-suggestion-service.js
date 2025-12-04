@@ -75,7 +75,8 @@ export default class LLMSuggestionService {
       trigger = 'manual',
       reason = 'manual',
       optionCount,
-      messageLimit
+      messageLimit,
+      previousSuggestions = []
     } = payload;
 
     if (!conversationId && !characterId) {
@@ -98,7 +99,8 @@ export default class LLMSuggestionService {
       count,
       trigger,
       reason,
-      context
+      context,
+      previousSuggestions
     });
 
     const requestParams = {
@@ -132,6 +134,7 @@ export default class LLMSuggestionService {
     let emittedCount = 0;
     let chunkCount = 0;
     let totalContentLength = 0;
+    let rawStreamContent = '';
 
     console.log('[LLMSuggestionService] Creating TOON parser');
     const parser = createToonSuggestionStreamParser({
@@ -139,9 +142,17 @@ export default class LLMSuggestionService {
         console.log('[LLMSuggestionService] Parser received header:', header);
         handlers.onHeader?.(header);
       },
+      onPartialSuggestion: (partial) => {
+        handlers.onPartialSuggestion?.({
+          index: emittedCount,
+          suggestion: partial
+        });
+      },
       onSuggestion: (item) => {
         console.log(`[LLMSuggestionService] Parser received suggestion #${emittedCount + 1}:`, item);
+        const suggestionIndex = emittedCount;
         const suggestion = this.decorateSuggestion(item, emittedCount, { trigger, reason });
+        suggestion.index = suggestionIndex;
         console.log(`[LLMSuggestionService] Decorated suggestion:`, suggestion);
         emittedCount += 1;
         handlers.onSuggestion?.(suggestion);
@@ -191,6 +202,7 @@ export default class LLMSuggestionService {
 
         if (delta) {
           totalContentLength += delta.length;
+          rawStreamContent += String(delta);
           console.log(
             `[LLMSuggestionService] Raw delta content (${delta.length} chars): "${String(delta).replace(/\n/g, '\\n')}"`
           );
@@ -215,6 +227,7 @@ export default class LLMSuggestionService {
       }
 
       console.log(`[LLMSuggestionService] Stream processing complete. Total chunks: ${chunkCount}, total content: ${totalContentLength} chars, emitted suggestions: ${emittedCount}`);
+      console.log('[LLMSuggestionService] Full streamed content:\n', rawStreamContent);
 
       console.log('[LLMSuggestionService] Calling parser.end() manually');
       parser.end();
@@ -261,7 +274,8 @@ export default class LLMSuggestionService {
           chunkCount,
           totalContentLength,
           emittedCount
-        }
+        },
+        rawStreamContent
       });
       throw error;
     } finally {
@@ -270,25 +284,75 @@ export default class LLMSuggestionService {
     }
   }
 
-  buildSuggestionPrompt({ count, trigger, reason, context }) {
+  buildSuggestionPrompt({ count, trigger, reason, context, previousSuggestions = [] }) {
     const triggerLabel = trigger === 'manual' ? '用户主动请求' : `系统被动触发（原因：${reason}）`;
+    const triggerGuidance = {
+      manual: '用户主动求助：提供多元策略（保守/进取/幽默/共情），帮助选择其一。',
+      silence: '静默提醒：给破冰/延续话题的轻量提示，降低冷场尴尬。',
+      message_count: '角色多条未回：提炼关键点，给一条综合回应思路，包含确认/回应/再提问。',
+      topic_change: '话题转折或被提问：先回应问题/态度，再给推进话题的具体方向。'
+    }[trigger] || '按通用策略生成多样化可选方案。';
+
+    const affinityStageText = context.affinityStage?.label
+      ? `${context.affinityStage.label}：${context.affinityStage.strategy}`
+      : '好感阶段未知：保持礼貌与真诚。';
+
+    const emotionText = context.emotion?.label
+      ? `最后一条角色消息情感：${context.emotion.label}（${context.emotion.reason || '推测'}）`
+      : '最后消息情感：中性';
+
+    const previousList = Array.isArray(previousSuggestions)
+      ? previousSuggestions.filter((item) => item && (item.title || item.content))
+      : [];
+    const previousSuggestionText = previousList.length
+      ? [
+          '【用户反馈】上一批建议未被采纳，用户要求换一批，请给出明显不同的新思路，避免重复或轻微改写。',
+          '【上一批建议（仅供去同质化参考）】',
+          ...previousList.slice(0, 5).map((item, index) => {
+            const tagsText = Array.isArray(item.tags) && item.tags.length ? ` [${item.tags.join('、')}]` : '';
+            return `${index + 1}. ${item.title || '未命名'}：${item.content || ''}${tagsText}`;
+          })
+        ].join('\n')
+      : null;
+
     return [
       `【触发方式】${triggerLabel}`,
+      `【触发策略指导】${triggerGuidance}`,
       `【角色信息】${context.characterProfile}`,
+      `【好感阶段策略】${affinityStageText}`,
       '【对话历史】',
       context.historyText,
+      `【情感分析】${emotionText}`,
+      ...(previousSuggestionText ? [previousSuggestionText] : []),
       `【输出要求】`,
-      `- 仅输出 TOON 格式，不要输出 JSON 或解释性语言`,
-      `- 表头必须为：suggestions[${count}]{title,content,tags,affinity_hint}:`,
-      `- 在表头下方，每行依次填写一个选项，字段之间用逗号分隔，示例：`,
+      `- 仅输出 TOON 格式，禁止任何解释、前缀、后缀或代码块，特别禁止输出「好的/以下是/结果如下」等冗余文本`,
+      `- 第一行必须直接是表头：suggestions[${count}]{suggestion,tags}:（前后不能有其他字符或空行）`,
+      `- 在表头下方，每行依次填写一个选项，字段之间必须使用英文逗号(,)分隔`,
+      `- 生成 ${count} 个选项，每个包含：suggestion（1-2 句话的详细可执行思路/话术，结合角色喜好/忌讳与情感状态）、tags（2-3 个策略标签，使用顿号/逗号分隔）`,
+      `- 选项必须覆盖不同策略维度：至少包含保守稳妥、积极进取、轻松幽默/共情中的若干，不要同质化`,
+      `- 严格结合触发方式：静默→破冰与轻量延续；消息累积→综合回应要点；话题转折→先回应问题/态度再推进；主动→多元供选`,
+      `- 严格结合角色档案：投其所好、避开忌讳，符合性格（内向勿过猛）与好感阶段边界`,
+      `- 如果提供了上一批建议，务必生成不同方向的新选项，避免与列表雷同或轻微改写`,
+      `- 不要直接代替玩家发言；不要输出泛化空话（如“多聊聊”“继续沟通”）；不要复述历史；不编造不存在的事实`,
+      `- 如果信息不足，也要给可行的引导，而不是返回空`,
+      `【示例（仅参考，不要输出示例本身）】`,
       '```toon',
-      'suggestions[2]{title,content,tags,affinity_hint}:',
-      '关心近况,询问她今天过得怎么样以延续聊天,"关心,延续",可能增加好感',
-      '制造轻松氛围,用幽默回应让对话不尴尬,"幽默,轻松",持平或略增',
-      '```',
-      `- 生成 ${count} 个选项，每个包含 title（话题方向）、content（50字以内详细提示）、tags（2-3个策略标签，使用顿号/逗号分隔）、affinity_hint（可选，说明可能的好感度影响）`,
-      '- 建议应具体且紧贴当前语境，不要直接代替用户发言，只给策略提示',
-      '- 如果没有足够信息，仍需根据已有内容给出引导，而不是返回空'
+      '示例1 初识破冰/静默：',
+      'suggestions[3]{suggestion,tags}:',
+      '用一句轻松的自我揭示开场，请她点评,"破冰,轻松"',
+      '提到她喜欢的音乐/电影并请她推荐最新的一首,"投其所好,互动"',
+      '针对她刚提到的细节表达共情再抛一个相关问题,"细节共情,延续"',
+      '示例2 角色提问/话题转折：',
+      'suggestions[3]{suggestion,tags}:',
+      '先正面回应她的问题，再补充你的看法并收个问句,"回应,态度明确"',
+      '复述她关心点表达理解，再抛一个轻问题引她说更多,"共情,确认"',
+      '给一个可执行的小提议并询问她意愿,"推进,邀请"',
+      '示例3 暧昧升温（中好感）：',
+      'suggestions[3]{suggestion,tags}:',
+      '针对她的优点给真诚夸奖并留白等待回应,"夸赞,暧昧"',
+      '提议一起做她喜欢的事并询问合适时间,"计划,邀请"',
+      '用轻松幽默回应保持轻快氛围，别过猛,"幽默,轻松"',
+      '```'
     ].join('\n');
   }
 
@@ -310,12 +374,13 @@ export default class LLMSuggestionService {
       : typeof item.tags === 'string'
         ? item.tags.split(/[,，、]/).map((tag) => tag.trim()).filter(Boolean).slice(0, 3)
         : [];
+    const suggestionText = item.suggestion || item.title || item.content || `选项 ${index + 1}`;
     return {
       id: suggestionId,
-      title: item.title || `选项 ${index + 1}`,
-      content: item.content || '',
+      title: suggestionText,
+      content: suggestionText,
       tags,
-      affinity_hint: item.affinity_hint || null,
+      // affinity_hint: item.affinity_hint || null,
       trigger,
       reason
     };

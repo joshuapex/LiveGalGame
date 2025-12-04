@@ -64,7 +64,8 @@ export const useSuggestions = (sessionInfo) => {
     return elapsed >= cooldownMs;
   }, [suggestionConfig]);
 
-  const resetStreamState = useCallback(() => {
+  const resetStreamState = useCallback((reason = 'unknown') => {
+    console.log(`[useSuggestions] resetStreamState called (reason: ${reason}). Clearing active stream:`, activeStreamRef.current);
     activeStreamRef.current = { id: null, trigger: null, reason: null };
   }, []);
 
@@ -82,6 +83,13 @@ export const useSuggestions = (sessionInfo) => {
         console.warn('[useSuggestions] startSuggestionStream API not available');
         return false;
       }
+      const previousSuggestions = Array.isArray(suggestions) && suggestions.length
+        ? suggestions.slice(0, suggestionConfig?.suggestion_count || 5).map((item) => ({
+            title: item.title || '',
+            content: item.content || '',
+            tags: item.tags || []
+          }))
+        : [];
       const streamId = `suggestion-stream-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
       console.log(`[useSuggestions] Generated streamId: ${streamId}`);
       activeStreamRef.current = { id: streamId, trigger, reason };
@@ -99,7 +107,8 @@ export const useSuggestions = (sessionInfo) => {
         trigger,
         reason,
         optionCount: suggestionConfig?.suggestion_count,
-        messageLimit: suggestionConfig?.context_message_limit
+        messageLimit: suggestionConfig?.context_message_limit,
+        previousSuggestions: previousSuggestions.length ? previousSuggestions : undefined
       };
       console.log('[useSuggestions] Sending startSuggestionStream payload:', payload);
 
@@ -107,7 +116,7 @@ export const useSuggestions = (sessionInfo) => {
       console.log('[useSuggestions] startSuggestionStream API called successfully');
       return true;
     },
-    [sessionInfo, suggestionConfig]
+    [sessionInfo, suggestionConfig, suggestions]
   );
 
   /**
@@ -134,6 +143,14 @@ export const useSuggestions = (sessionInfo) => {
         return;
       }
 
+      const previousSuggestions = Array.isArray(suggestions) && suggestions.length
+        ? suggestions.slice(0, suggestionConfig?.suggestion_count || 5).map((item) => ({
+            title: item.title || '',
+            content: item.content || '',
+            tags: item.tags || []
+          }))
+        : [];
+
       setSuggestionStatus('loading');
       setSuggestionError('');
       try {
@@ -143,7 +160,8 @@ export const useSuggestions = (sessionInfo) => {
           trigger,
           reason,
           optionCount: suggestionConfig?.suggestion_count,
-          messageLimit: suggestionConfig?.context_message_limit
+          messageLimit: suggestionConfig?.context_message_limit,
+          previousSuggestions: previousSuggestions.length ? previousSuggestions : undefined
         });
         setSuggestions(result?.suggestions || []);
         setSuggestionMeta({
@@ -160,7 +178,7 @@ export const useSuggestions = (sessionInfo) => {
         setSuggestionStatus('idle');
       }
     },
-    [sessionInfo, suggestionConfig, suggestionStatus, startSuggestionStream]
+    [sessionInfo, suggestionConfig, suggestionStatus, startSuggestionStream, suggestions]
   );
 
   /**
@@ -253,6 +271,41 @@ export const useSuggestions = (sessionInfo) => {
 
   const streamingHandlersRegisteredRef = useRef(false);
 
+  // 将 partial/最终建议按索引更新到列表
+  const upsertSuggestionAt = useCallback((incoming = {}, index, streaming = false) => {
+    setSuggestions((prev) => {
+      const next = [...prev];
+      const targetIndex = Number.isInteger(index) ? index : next.length;
+      while (next.length <= targetIndex) {
+        next.push({
+          id: `partial-${targetIndex}-${next.length}`,
+          title: '',
+          content: '',
+          tags: [],
+          streaming: true
+        });
+      }
+      const base = next[targetIndex] || {};
+      const text =
+        incoming.content ||
+        incoming.title ||
+        incoming.suggestion ||
+        base.content ||
+        base.title ||
+        '';
+      next[targetIndex] = {
+        ...base,
+        ...incoming,
+        id: incoming.id || base.id || `partial-${targetIndex}`,
+        title: incoming.title || text,
+        content: incoming.content || text,
+        tags: incoming.tags || base.tags || [],
+        streaming
+      };
+      return next;
+    });
+  }, []);
+
   useEffect(() => {
     if (!window.electronAPI?.startSuggestionStream || streamingHandlersRegisteredRef.current) {
       return undefined;
@@ -303,8 +356,23 @@ export const useSuggestions = (sessionInfo) => {
         window.electronAPI.onSuggestionStreamChunk((data = {}) => {
           console.log('[useSuggestions] Received onSuggestionStreamChunk:', data);
           if (data.streamId !== activeStreamRef.current?.id) {
-            console.log(`[useSuggestions] Ignoring chunk - streamId mismatch: ${data.streamId} vs ${activeStreamRef.current?.id}`);
-            return;
+            if (!activeStreamRef.current?.id && data.streamId) {
+              console.warn(
+                `[useSuggestions] No active stream, attempting recovery with incoming streamId: ${data.streamId}`
+              );
+              activeStreamRef.current = {
+                id: data.streamId,
+                trigger: data.trigger || 'unknown',
+                reason: data.reason || 'recovered_from_chunk'
+              };
+            } else {
+              console.log(
+                `[useSuggestions] Ignoring chunk - streamId mismatch: ${data.streamId} vs ${activeStreamRef.current?.id} (active stream:`,
+                activeStreamRef.current,
+                ')'
+              );
+              return;
+            }
           }
           const chunkText =
             data?.chunk ||
@@ -318,11 +386,27 @@ export const useSuggestions = (sessionInfo) => {
             return;
           }
           console.log('[useSuggestions] Processing suggestion chunk:', data.suggestion);
-          setSuggestions((prev) => {
-            const newSuggestions = [...prev, data.suggestion];
-            console.log(`[useSuggestions] Updated suggestions count: ${newSuggestions.length}`);
-            return newSuggestions;
-          });
+          const targetIndex = Number.isInteger(data.index) ? data.index : undefined;
+          upsertSuggestionAt(data.suggestion, targetIndex, false);
+          console.log('[useSuggestions] Updated suggestions with final chunk');
+        })
+      );
+    }
+
+    if (window.electronAPI.onSuggestionStreamPartial) {
+      unsubs.push(
+        window.electronAPI.onSuggestionStreamPartial((data = {}) => {
+          console.log('[useSuggestions] Received onSuggestionStreamPartial:', data);
+          if (data.streamId !== activeStreamRef.current?.id) {
+            console.log(
+              `[useSuggestions] Ignoring partial - streamId mismatch: ${data.streamId} vs ${activeStreamRef.current?.id}`
+            );
+            return;
+          }
+          const targetIndex = Number.isInteger(data.index) ? data.index : undefined;
+          const suggestionData = data.suggestion || {};
+          upsertSuggestionAt(suggestionData, targetIndex, true);
+          console.log('[useSuggestions] Updated suggestions with partial chunk');
         })
       );
     }
@@ -338,7 +422,8 @@ export const useSuggestions = (sessionInfo) => {
           console.log('[useSuggestions] Processing stream error event');
           setSuggestionError(data.error || '生成失败，请稍后重试');
           setSuggestionStatus('idle');
-          resetStreamState();
+          // 延迟重置，给同一批事件一个处理窗口
+          setTimeout(() => resetStreamState('stream_error'), 0);
         })
       );
     }
@@ -348,8 +433,21 @@ export const useSuggestions = (sessionInfo) => {
         window.electronAPI.onSuggestionStreamEnd((data = {}) => {
           console.log('[useSuggestions] Received onSuggestionStreamEnd:', data);
           if (data.streamId !== activeStreamRef.current?.id) {
-            console.log(`[useSuggestions] Ignoring stream end - streamId mismatch: ${data.streamId} vs ${activeStreamRef.current?.id}`);
-            return;
+            if (!activeStreamRef.current?.id && data.streamId) {
+              console.warn(
+                `[useSuggestions] No active stream on end, attempting recovery with incoming streamId: ${data.streamId}`
+              );
+              activeStreamRef.current = {
+                id: data.streamId,
+                trigger: data.trigger || 'unknown',
+                reason: data.reason || 'recovered_from_end'
+              };
+            } else {
+              console.log(
+                `[useSuggestions] Ignoring stream end - streamId mismatch: ${data.streamId} vs ${activeStreamRef.current?.id}`
+              );
+              return;
+            }
           }
           console.log('[useSuggestions] Processing stream end event');
           if (data.success) {
@@ -365,7 +463,8 @@ export const useSuggestions = (sessionInfo) => {
             });
           }
           suggestionCooldownRef.current = Date.now();
-          resetStreamState();
+          // 延迟重置，避免和同一 tick 内的 chunk 竞争
+          setTimeout(() => resetStreamState('stream_end'), 0);
         })
       );
     }
@@ -385,7 +484,7 @@ export const useSuggestions = (sessionInfo) => {
       setLastCharacterMessageTs(null);
       suggestionCooldownRef.current = 0;
       topicDetectionStateRef.current = { running: false, lastMessageId: null };
-      resetStreamState();
+      resetStreamState('conversation_id_cleared');
       return;
     }
 
@@ -396,7 +495,12 @@ export const useSuggestions = (sessionInfo) => {
     setLastCharacterMessageTs(null);
     suggestionCooldownRef.current = 0;
     topicDetectionStateRef.current = { running: false, lastMessageId: null };
-    resetStreamState();
+    // 如果有活跃流，避免强制重置导致流事件丢弃
+    if (activeStreamRef.current.id) {
+      console.log('[useSuggestions] Skipping reset due to active stream:', activeStreamRef.current);
+      return;
+    }
+    resetStreamState('conversation_changed');
   }, [sessionInfo?.conversationId, loadSuggestionConfig, resetStreamState]);
 
   // 静默触发检查

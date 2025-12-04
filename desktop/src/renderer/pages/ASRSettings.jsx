@@ -1,53 +1,11 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-
-const SIZE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB'];
-
-function formatBytes(bytes) {
-  if (!bytes || bytes <= 0) {
-    return '0 B';
-  }
-  const exponent = Math.min(
-    Math.floor(Math.log(bytes) / Math.log(1024)),
-    SIZE_UNITS.length - 1
-  );
-  const value = bytes / (1024 ** exponent);
-  return `${value.toFixed(value >= 10 || exponent === 0 ? 0 : 1)} ${SIZE_UNITS[exponent]}`;
-}
-
-function formatSpeed(bytesPerSecond) {
-  if (!bytesPerSecond || bytesPerSecond <= 0) {
-    return '—';
-  }
-  return `${formatBytes(bytesPerSecond)}/s`;
-}
-
-function buildStatusMap(statusList = []) {
-  return statusList.reduce((acc, status) => {
-    if (!status?.modelId) {
-      return acc;
-    }
-    acc[status.modelId] = {
-      bytesPerSecond: 0,
-      ...status,
-    };
-    return acc;
-  }, {});
-}
-
-function calculateProgress(downloadedBytes, totalBytes) {
-  if (!totalBytes || totalBytes <= 0) {
-    return 0;
-  }
-  return Math.min(100, Math.round((downloadedBytes / totalBytes) * 100));
-}
-
-function isPresetActive(preset, activeModelId) {
-  if (!activeModelId) {
-    return false;
-  }
-  return activeModelId === preset.id || activeModelId === preset.repoId;
-}
+import { ASRModelCard } from './ASRModelCard';
+import { ASRConfigForm } from './ASRConfigForm';
+import {
+  buildStatusMap,
+  engineNames,
+} from './asrSettingsUtils';
 
 /**
  * ASR（语音识别）设置页面
@@ -94,14 +52,6 @@ function ASRSettings() {
     audio_retention_days: 30,
     audio_storage_path: ''
   });
-
-  // 语言选项
-  const languageOptions = [
-    { value: 'zh', label: '中文' },
-    { value: 'en', label: '英文' },
-    { value: 'ja', label: '日文' },
-    { value: 'auto', label: '自动检测' }
-  ];
 
   useEffect(() => {
     loadASRConfigs();
@@ -422,123 +372,6 @@ function ASRSettings() {
 
   const selectedModelPreset = modelPresets.find((preset) => preset.id === formData.model_name);
 
-  const renderModelCard = (preset) => {
-    const status = modelStatuses[preset.id] || {};
-    const totalBytes = status.totalBytes || status.sizeBytes || preset.sizeBytes || 0;
-    const downloadedBytes = status.downloadedBytes || 0;
-    const percent = calculateProgress(downloadedBytes, totalBytes);
-    const isDownloaded = Boolean(status.isDownloaded);
-    const activeDownload = Boolean(status.activeDownload);
-    const isActive = isPresetActive(preset, activeModelId);
-    const updatedAt = status.updatedAt ? new Date(status.updatedAt).toLocaleString() : null;
-    const progressVisible = totalBytes > 0 && (activeDownload || (downloadedBytes > 0 && !isDownloaded));
-    const engine = preset.engine || 'faster-whisper';
-
-    return (
-      <div
-        key={preset.id}
-        className={`rounded-2xl border bg-white p-5 shadow-sm transition-all ${isActive ? 'border-blue-500 ring-2 ring-blue-100' : 'border-gray-200'
-          }`}
-      >
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex-1">
-            <div className="flex items-center gap-2">
-              <h3 className="text-lg font-semibold text-gray-900">{preset.label}</h3>
-              <span className={`px-2 py-1 text-xs font-medium rounded-full ${
-                engine === 'funasr'
-                  ? 'bg-purple-100 text-purple-800'
-                  : 'bg-blue-100 text-blue-800'
-              }`}>
-                {engineNames[engine] || engine}
-              </span>
-            </div>
-            <p className="mt-1 text-sm text-gray-600">{preset.description}</p>
-            {preset.language && (
-              <p className="mt-1 text-xs text-gray-500">
-                语言: {preset.language === 'zh' ? '中文' : preset.language === 'multilingual' ? '多语言' : preset.language}
-              </p>
-            )}
-          </div>
-          {isActive && (
-            <span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-700">
-              当前使用
-            </span>
-          )}
-        </div>
-
-        <div className="mt-4 grid gap-2 text-sm text-gray-700">
-          <p>推荐配置：{preset.recommendedSpec}</p>
-          <p>速度参考：{preset.speedHint}</p>
-          <p>模型大小：{formatBytes(preset.sizeBytes)}</p>
-        </div>
-
-        <div className="mt-4 text-sm">
-          {isDownloaded ? (
-            <div className="flex items-center text-green-600">
-              <span className="material-symbols-outlined mr-1 text-sm">check_circle</span>
-              <span>
-                本地可用{updatedAt ? ` · 更新于 ${updatedAt}` : ''}
-              </span>
-            </div>
-          ) : (
-            <div className="text-gray-500">
-              {activeDownload ? '正在下载模型...' : '尚未下载，点击下方按钮开始下载'}
-            </div>
-          )}
-        </div>
-
-        {progressVisible && (
-          <div className="mt-3">
-            <div className="h-2 w-full overflow-hidden rounded-full bg-gray-100">
-              <div
-                className={`h-full rounded-full ${isDownloaded ? 'bg-green-500' : 'bg-blue-500'}`}
-                style={{ width: `${percent}%` }}
-              />
-            </div>
-            <div className="mt-1 flex items-center justify-between text-xs text-gray-600">
-              <span>
-                {formatBytes(downloadedBytes)} / {formatBytes(totalBytes)} ({percent}%)
-              </span>
-              <span>速度：{formatSpeed(status.bytesPerSecond)}</span>
-            </div>
-          </div>
-        )}
-
-        <div className="mt-4 flex flex-wrap gap-2">
-          {isDownloaded ? (
-            <button
-              onClick={() => handleSetActiveModel(preset.id)}
-              disabled={isActive || savingModelId === preset.id}
-              className={`rounded-lg px-4 py-2 text-sm font-medium ${isActive
-                  ? 'bg-gray-100 text-gray-500 cursor-not-allowed'
-                  : 'bg-blue-600 text-white hover:bg-blue-700'
-                } transition-colors`}
-            >
-              {isActive ? '当前已启用' : savingModelId === preset.id ? '应用中...' : '设为当前模型'}
-            </button>
-          ) : (
-            <button
-              onClick={() => handleDownloadModel(preset.id)}
-              disabled={activeDownload || modelsLoading}
-              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-300"
-            >
-              {activeDownload ? '下载中...' : '下载模型'}
-            </button>
-          )}
-
-          {activeDownload && (
-            <button
-              onClick={() => handleCancelDownload(preset.id)}
-              className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-            >
-              取消下载
-            </button>
-          )}
-        </div>
-      </div>
-    );
-  };
-
   if (loading) {
     return (
       <div className="container mx-auto p-6 max-w-6xl">
@@ -637,7 +470,19 @@ function ASRSettings() {
                   </h3>
                 </div>
                 <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-                  {presets.map((preset) => renderModelCard(preset))}
+                  {presets.map((preset) => (
+                    <ASRModelCard
+                      key={preset.id}
+                      preset={preset}
+                      status={modelStatuses[preset.id] || {}}
+                      activeModelId={activeModelId}
+                      savingModelId={savingModelId}
+                      modelsLoading={modelsLoading}
+                      onSetActive={handleSetActiveModel}
+                      onDownload={handleDownloadModel}
+                      onCancelDownload={handleCancelDownload}
+                    />
+                  ))}
                 </div>
               </div>
             ))}
@@ -738,156 +583,17 @@ function ASRSettings() {
 
       {/* 添加配置表单 */}
       {showAddConfig && (
-        <div className="mb-8 p-6 bg-white rounded-lg border border-gray-200 shadow-sm">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">添加 ASR 配置</h3>
-
-          <div className="grid gap-4 md:grid-cols-2">
-            {/* 模型选择 */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                模型 *
-              </label>
-              <select
-                value={formData.model_name}
-                onChange={(e) => setFormData({ ...formData, model_name: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                {modelPresets.length === 0 && (
-                  <option value="">暂无可用模型</option>
-                )}
-                {modelPresets.map((preset) => (
-                  <option key={preset.id} value={preset.id}>
-                    {preset.label} ({formatBytes(preset.sizeBytes)})
-                  </option>
-                ))}
-              </select>
-              <p className="mt-1 text-xs text-gray-500">
-                {selectedModelPreset
-                  ? `${selectedModelPreset.description} · 推荐: ${selectedModelPreset.recommendedSpec}`
-                  : '选择模型后可查看详细说明'}
-              </p>
-            </div>
-
-            {/* 语言选择 */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                识别语言 *
-              </label>
-              <select
-                value={formData.language}
-                onChange={(e) => setFormData({ ...formData, language: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                {languageOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* 停顿阈值 */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                分句停顿阈值（秒）
-              </label>
-              <input
-                type="number"
-                step="0.1"
-                min="0.5"
-                max="5.0"
-                value={formData.sentence_pause_threshold}
-                onChange={(e) => setFormData({ ...formData, sentence_pause_threshold: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-              <p className="mt-1 text-xs text-gray-500">
-                检测到停顿超过此时间（秒）时进行分句
-              </p>
-            </div>
-
-            {/* VAD 开关 */}
-            <div className="flex items-center">
-              <input
-                type="checkbox"
-                id="enable_vad"
-                checked={formData.enable_vad}
-                onChange={(e) => setFormData({ ...formData, enable_vad: e.target.checked })}
-                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-              />
-              <label htmlFor="enable_vad" className="ml-2 text-sm text-gray-700">
-                启用语音活动检测（VAD）
-              </label>
-            </div>
-
-            {/* 录音文件保留 */}
-            <div className="flex items-center">
-              <input
-                type="checkbox"
-                id="retain_audio_files"
-                checked={formData.retain_audio_files}
-                onChange={(e) => setFormData({ ...formData, retain_audio_files: e.target.checked })}
-                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-              />
-              <label htmlFor="retain_audio_files" className="ml-2 text-sm text-gray-700">
-                保留录音文件
-              </label>
-            </div>
-
-            {/* 保留天数 */}
-            {formData.retain_audio_files && (
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  录音文件保留天数
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  max="365"
-                  value={formData.audio_retention_days}
-                  onChange={(e) => setFormData({ ...formData, audio_retention_days: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-            )}
-
-            {/* 存储路径 */}
-            {formData.retain_audio_files && (
-              <div className="md:col-span-2">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  录音文件存储路径（可选）
-                </label>
-                <input
-                  type="text"
-                  placeholder="默认为: desktop/audio_recordings/"
-                  value={formData.audio_storage_path}
-                  onChange={(e) => setFormData({ ...formData, audio_storage_path: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                <p className="mt-1 text-xs text-gray-500">
-                  留空使用默认路径，或指定自定义路径
-                </p>
-              </div>
-            )}
-          </div>
-
-          <div className="mt-6 flex justify-end space-x-3">
-            <button
-              onClick={() => {
-                setShowAddConfig(false);
-                resetForm();
-              }}
-              className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
-            >
-              取消
-            </button>
-            <button
-              onClick={handleCreateConfig}
-              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
-            >
-              创建配置
-            </button>
-          </div>
-        </div>
+        <ASRConfigForm
+          formData={formData}
+          setFormData={setFormData}
+          modelPresets={modelPresets}
+          selectedModelPreset={selectedModelPreset}
+          onCreate={handleCreateConfig}
+          onCancel={() => {
+            setShowAddConfig(false);
+            resetForm();
+          }}
+        />
       )}
 
       {/* 操作按钮 */}

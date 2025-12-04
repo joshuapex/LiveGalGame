@@ -9,9 +9,8 @@ import { useSuggestions } from './hooks/useSuggestions.js';
 
 // Components
 import { SessionSelector } from "./pages/HUD/SessionSelector.jsx";
-import { TranscriptView } from './components/Chat/TranscriptView.jsx';
-import { SuggestionsPanel } from './components/Chat/SuggestionsPanel.jsx';
-import { VolumeIndicators } from './components/Chat/VolumeIndicators.jsx';
+import { CompactHud } from './components/Chat/CompactHud.jsx';
+import { FullHud } from './components/Chat/FullHud.jsx';
 
 const getPointerCoords = (event) => {
   const x = event.screenX !== undefined && event.screenX !== null ? event.screenX : event.clientX;
@@ -32,6 +31,8 @@ function Hud() {
   const [systemAudioNotAuthorized, setSystemAudioNotAuthorized] = React.useState(false);
   const [isListening, setIsListening] = React.useState(false);
   const [showSelector, setShowSelector] = React.useState(true);
+  const [viewMode, setViewMode] = React.useState('full'); // full | compact
+
 
   // 临时禁用streaming功能
   const streamingDisabled = true;
@@ -177,84 +178,59 @@ function Hud() {
     }
   }, [chatSession.sessionInfo]);
 
+  const handleSwitchSession = () => {
+    setShowSelector(true);
+    setViewMode('full');
+    chatSession.handleSwitchSession();
+  };
+
+  const handleToggleViewMode = () => {
+    setViewMode((prev) => (prev === 'full' ? 'compact' : 'full'));
+  };
+
   if (showSelector) {
     return <SessionSelector onSessionSelected={chatSession.handleSessionSelected} onClose={chatSession.handleClose} />;
   }
 
+  if (viewMode === 'compact') {
+    return (
+      <CompactHud
+        isListening={isListening}
+        micVolumeLevel={micVolumeLevel}
+        systemVolumeLevel={systemVolumeLevel}
+        suggestions={suggestions.suggestions}
+        suggestionStatus={suggestions.suggestionStatus}
+        suggestionError={suggestions.suggestionError}
+        suggestionMeta={suggestions.suggestionMeta}
+        copiedSuggestionId={suggestions.copiedSuggestionId}
+        onGenerate={suggestions.handleGenerateSuggestions}
+        onCopy={suggestions.handleCopySuggestion}
+        onToggleListening={toggleListening}
+        onSwitchSession={handleSwitchSession}
+        onClose={chatSession.handleClose}
+        onToggleViewMode={handleToggleViewMode}
+        sessionInfo={chatSession.sessionInfo}
+      />
+    );
+  }
+
+
   return (
-    <div className="hud-container">
-      <div className="hud-content">
-        <header className="hud-header">
-          <div
-            className="hud-drag-zone"
-            title="拖拽HUD"
-          >
-            <span className="status-indicator" />
-            <span className="hud-title">{chatSession.sessionInfo?.characterName || '心情助手'}</span>
-          </div>
-          <div className="hud-controls">
-            <button
-              className={`control-btn ${isListening ? 'listening' : ''}`}
-              onClick={toggleListening}
-              title={isListening ? "停止监听" : "开始监听"}
-              style={{ color: isListening ? '#ff4d4f' : '#52c41a', marginRight: '8px' }}
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                {isListening ? (
-                  <rect x="6" y="4" width="4" height="16"></rect>
-                ) : (
-                  <polygon points="5 3 19 12 5 21 5 3"></polygon>
-                )}
-                {isListening && <rect x="14" y="4" width="4" height="16"></rect>}
-              </svg>
-            </button>
-            <button className="control-btn" onClick={() => setShowSelector(true)} title="切换会话">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path>
-                <path d="M21 3v5h-5"></path>
-                <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path>
-                <path d="M3 21v-5h5"></path>
-              </svg>
-            </button>
-            <button className="control-btn" onClick={chatSession.handleClose} aria-label="关闭 HUD">
-              ×
-            </button>
-          </div>
-        </header>
-
-        <section className="hud-section">
-          <div className="section-label">{chatSession.sessionInfo?.conversationName || '最近互动'}</div>
-          <TranscriptView
-            messages={messages.messages}
-            loading={messages.loading}
-            error={chatSession.error || messages.error}
-            isListening={isListening}
-            isNew={chatSession.sessionInfo?.isNew}
-            transcriptRef={messages.transcriptRef}
-          />
-
-          <VolumeIndicators
-            micVolumeLevel={micVolumeLevel}
-            systemVolumeLevel={systemVolumeLevel}
-            systemAudioNotAuthorized={systemAudioNotAuthorized}
-            sessionInfo={chatSession.sessionInfo}
-          />
-        </section>
-
-        <SuggestionsPanel
-          suggestions={suggestions.suggestions}
-          suggestionMeta={suggestions.suggestionMeta}
-          suggestionStatus={suggestions.suggestionStatus}
-          suggestionError={suggestions.suggestionError}
-          PASSIVE_REASON_LABEL={suggestions.PASSIVE_REASON_LABEL}
-          copiedSuggestionId={suggestions.copiedSuggestionId}
-          onGenerate={suggestions.handleGenerateSuggestions}
-          onCopy={suggestions.handleCopySuggestion}
-          sessionInfo={chatSession.sessionInfo}
-        />
-      </div>
-    </div>
+    <FullHud
+      isListening={isListening}
+      toggleListening={toggleListening}
+      micVolumeLevel={micVolumeLevel}
+      systemVolumeLevel={systemVolumeLevel}
+      systemAudioNotAuthorized={systemAudioNotAuthorized}
+      chatSession={chatSession}
+      messages={messages}
+      suggestions={suggestions}
+      onSwitchSession={handleSwitchSession}
+      onToggleViewMode={handleToggleViewMode}
+      onClose={chatSession.handleClose}
+    />
   );
+
 }
 
 const hudRoot = document.getElementById('hud-root');

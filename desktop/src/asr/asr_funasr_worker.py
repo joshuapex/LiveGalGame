@@ -1,26 +1,7 @@
 #!/usr/bin/env python3
-"""
-FunASR Worker with Streaming Recognition
+# FunASR Worker: streaming ASR + punctuation + hybrid segmentation
 
-基于 FunASR/paraformer-zh-streaming 的流式语音识别引擎
-支持实时音频流识别、中文标点符号添加和时间戳预测。
-
-核心特性：
-1. 滑动窗口流式识别
-2. 缓存机制维持上下文
-3. 中文标点符号优化
-4. 混合分句策略
-
-IPC 协议：
-- 输入：streaming_chunk, batch_file, reset_session, force_commit
-- 输出：
-  - partial: 实时字幕（增量文本）
-  - sentence_complete: 完整句子（触发存库）
-"""
-
-import base64
 import json
-import math
 import os
 import sys
 import time
@@ -30,6 +11,10 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 from funasr import AutoModel
+
+from asr_utils import decode_audio_chunk, extract_incremental_text, split_by_sentence_end
+from funasr_helpers import funasr_streaming_recognition, load_funasr_models
+from funasr_text_utils import apply_incremental_punctuation, apply_punctuation
 
 # ==============================================================================
 # OS 级别的文件描述符重定向
@@ -84,7 +69,6 @@ MAX_BUFFER_SAMPLES = int(MAX_BUFFER_SECONDS * SAMPLE_RATE)
 
 # 分句配置
 SENTENCE_END_PUNCTUATION = set("。！？!?.；;")
-CLAUSE_PUNCTUATION = set("，,、：:")
 MIN_SENTENCE_CHARS = int(os.environ.get("MIN_SENTENCE_CHARS", "4"))
 # 【优化】提高自动提交门槛，减少句子截断
 MIN_AUTO_COMMIT_CHARS = int(os.environ.get("MIN_AUTO_COMMIT_CHARS", "30"))  # 从18提高到30
@@ -173,13 +157,6 @@ class SessionState:
         self.unstable_raw_text = ""
 
 
-def decode_audio_chunk(audio_b64: str) -> np.ndarray:
-    """解码音频块"""
-    audio_bytes = base64.b64decode(audio_b64)
-    audio_int16 = np.frombuffer(audio_bytes, dtype=np.int16)
-    return audio_int16.astype(np.float32) / 32768.0
-
-
 def extract_incremental_text(previous: str, current: str) -> str:
     """提取增量文本"""
     if not current:
@@ -197,233 +174,6 @@ def extract_incremental_text(previous: str, current: str) -> str:
         if previous[-overlap:] == current[:overlap]:
             return current[overlap:]
     return current
-
-
-def find_last_sentence_end(text: str) -> int:
-    """找到文本中最后一个句末标点的位置
-    
-    返回：最后一个句末标点之后的位置索引，如果没有找到返回 0
-    """
-    last_pos = -1
-    for i, char in enumerate(text):
-        if char in SENTENCE_END_PUNCTUATION:
-            last_pos = i
-    return last_pos + 1 if last_pos >= 0 else 0
-
-
-def split_stable_unstable(text: str) -> Tuple[str, str]:
-    """将文本分割为稳定部分（最后句末标点之前）和不稳定部分（之后）
-    
-    返回：(stable_part, unstable_part)
-    """
-    last_end_pos = find_last_sentence_end(text)
-    return text[:last_end_pos], text[last_end_pos:]
-
-
-def find_sentence_boundaries(text: str) -> List[Tuple[int, str]]:
-    """找到文本中的句子边界"""
-    boundaries = []
-    for i, char in enumerate(text):
-        if char in SENTENCE_END_PUNCTUATION:
-            boundaries.append((i + 1, 'end'))
-        elif char in CLAUSE_PUNCTUATION:
-            boundaries.append((i + 1, 'clause'))
-    return boundaries
-
-
-def split_by_sentence_end(text: str) -> Tuple[List[str], str]:
-    """按句末标点分割文本"""
-    import re
-    sentences = []
-    remaining = text
-
-    # 使用正则匹配句末标点
-    pattern = r'([^。！？!?.；;]*[。！？!?.；;])'
-    matches = list(re.finditer(pattern, text))
-
-    if not matches:
-        return [], text
-
-    last_end = 0
-    for match in matches:
-        sentence = match.group(1).strip()
-        if sentence and len(sentence) >= MIN_SENTENCE_CHARS:
-            sentences.append(sentence)
-        last_end = match.end()
-
-    remaining = text[last_end:].strip()
-    return sentences, remaining
-
-
-def load_funasr_models() -> Tuple[AutoModel, AutoModel, AutoModel]:
-    """加载 FunASR 模型
-    
-    使用 ModelScope (默认 hub="ms") 下载模型，国内访问更稳定。
-    模型名称映射参见 funasr/download/name_maps_from_hub.py:
-      - paraformer-zh-streaming -> iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online
-      - ct-punc -> iic/punc_ct-transformer_cn-en-common-vocab471067-large
-      - fa-zh -> iic/speech_timestamp_prediction-v1-16k-offline
-    
-    【重要】使用 model_revision="v2.0.4" 与测试 Demo 保持一致
-    """
-    sys.stderr.write(f"[FunASR Worker] Loading models from cache: {CACHE_DIR}\n")
-    sys.stderr.write(f"[FunASR Worker] Chunk stride: {FUNASR_STRIDE_SAMPLES} samples ({FUNASR_STRIDE_SAMPLES/SAMPLE_RATE*1000:.0f}ms)\n")
-    sys.stderr.flush()
-
-    try:
-        # 流式识别模型 - 使用 FunASR 官方注册名称，内部会映射到 ModelScope 仓库
-        # 【重要】指定 model_revision="v2.0.4" 与 Demo 保持一致
-        sys.stderr.write("[FunASR Worker] Loading streaming ASR model: paraformer-zh-streaming (v2.0.4)\n")
-        stream_model = AutoModel(
-            model="paraformer-zh-streaming",
-            model_revision="v2.0.4",
-        )
-        sys.stderr.write("[FunASR Worker] Streaming model loaded\n")
-
-        # 标点符号模型
-        sys.stderr.write("[FunASR Worker] Loading punctuation model: ct-punc (v2.0.4)\n")
-        punc_model = AutoModel(
-            model="ct-punc",
-            model_revision="v2.0.4",
-        )
-        sys.stderr.write("[FunASR Worker] Punctuation model loaded\n")
-
-        # 时间戳预测模型（可选）
-        try:
-            sys.stderr.write("[FunASR Worker] Loading timestamp model: fa-zh (v2.0.4)\n")
-            ts_model = AutoModel(
-                model="fa-zh",
-                model_revision="v2.0.4",
-            )
-            sys.stderr.write("[FunASR Worker] Timestamp model loaded\n")
-        except Exception as e:
-            sys.stderr.write(f"[FunASR Worker] Timestamp model load failed (optional): {e}\n")
-            ts_model = None
-
-        sys.stderr.flush()
-        return stream_model, punc_model, ts_model
-
-    except Exception as e:
-        sys.stderr.write(f"[FunASR Worker] Model loading failed: {e}\n")
-        sys.stderr.write(traceback.format_exc())
-        sys.stderr.flush()
-        raise
-
-
-def funasr_streaming_recognition(
-    audio_array: np.ndarray,
-    model: AutoModel,
-    cache: Dict,
-    is_final: bool = False
-) -> str:
-    """
-    FunASR 流式识别
-
-    返回：增量文本
-    """
-    try:
-        # FunASR 流式识别调用
-        results = model.generate(
-            input=audio_array,
-            cache=cache,
-            is_final=is_final,
-            chunk_size=CHUNK_SIZE_LIST,
-            encoder_chunk_look_back=ENCODER_LOOK_BACK,
-            decoder_chunk_look_back=DECODER_LOOK_BACK,
-        )
-
-        # 提取文本
-        chunk_text = ""
-        if isinstance(results, list) and results:
-            for item in results:
-                if isinstance(item, dict) and "text" in item:
-                    chunk_text += item["text"]
-        elif isinstance(results, dict) and "text" in results:
-            chunk_text = results["text"]
-
-        return chunk_text.strip()
-
-    except Exception as e:
-        sys.stderr.write(f"[FunASR Worker] Streaming recognition failed: {e}\n")
-        sys.stderr.write(traceback.format_exc())
-        sys.stderr.flush()
-        return ""
-
-
-def apply_punctuation(text: str, model: AutoModel) -> str:
-    """应用标点符号"""
-    if not text or not text.strip():
-        return text
-
-    try:
-        response = model.generate(input=text.strip())
-        if response and isinstance(response, list) and len(response) > 0:
-            if isinstance(response[0], dict):
-                punctuated_text = response[0].get("text", "") or response[0].get("value", "")
-                return punctuated_text.strip() if punctuated_text else text
-            else:
-                return str(response[0]).strip()
-        elif isinstance(response, dict):
-            punctuated_text = response.get("text", "") or response.get("value", "")
-            return punctuated_text.strip() if punctuated_text else text
-        return text
-    except Exception as e:
-        sys.stderr.write(f"[FunASR Worker] Punctuation failed: {e}\n")
-        return text
-
-
-def apply_incremental_punctuation(
-    stable_text: str,
-    new_raw_text: str,
-    punc_model: AutoModel,
-    context_sentences: int = 1
-) -> str:
-    """
-    增量标点化：只对新文本添加标点，保留上下文提升准确性
-    
-    Args:
-        stable_text: 已经标点化且稳定的文本
-        new_raw_text: 新增的未标点化文本
-        punc_model: 标点模型
-        context_sentences: 保留多少个已完成句子作为上下文
-    
-    Returns:
-        标点化后的新文本（不包含上下文）
-    """
-    if not new_raw_text or not new_raw_text.strip():
-        return ""
-    
-    # 从 stable_text 中提取上下文（最后 N 个句子）
-    context = ""
-    if stable_text and context_sentences > 0:
-        # 找到所有句末标点位置
-        sentence_ends = []
-        for i, char in enumerate(stable_text):
-            if char in SENTENCE_END_PUNCTUATION:
-                sentence_ends.append(i + 1)
-        
-        # 取最后 N 个句子
-        if sentence_ends:
-            start_pos = sentence_ends[-context_sentences] if len(sentence_ends) >= context_sentences else 0
-            context = stable_text[start_pos:]
-    
-    # 组合上下文 + 新文本进行标点化
-    text_to_punctuate = f"{context}{new_raw_text}"
-    punctuated_full = apply_punctuation(text_to_punctuate, punc_model)
-    
-    # 提取新文本对应的标点化结果
-    if context:
-        # 移除上下文部分，只返回新文本的标点化结果
-        # 由于标点可能改变长度，我们需要智能匹配
-        context_len = len(context)
-        # 简化处理：假设上下文部分基本不变，直接截取
-        if len(punctuated_full) > context_len:
-            return punctuated_full[context_len:]
-        else:
-            # 如果标点化后反而变短了，说明可能有问题，返回原始新文本
-            return new_raw_text
-    else:
-        return punctuated_full
 
 
 def process_single_chunk(
@@ -444,6 +194,9 @@ def process_single_chunk(
             chunk,
             stream_model,
             state.funasr_cache,
+            CHUNK_SIZE_LIST,
+            ENCODER_LOOK_BACK,
+            DECODER_LOOK_BACK,
             is_final=is_final,
         )
         return raw_text
@@ -592,6 +345,7 @@ def handle_streaming_chunk(
             state.stable_punctuated_text,
             state.unstable_raw_text,
             punc_model,
+            SENTENCE_END_PUNCTUATION,
             context_sentences=PUNC_CONTEXT_SENTENCES
         )
         
@@ -634,12 +388,17 @@ def handle_streaming_chunk(
             state.stable_punctuated_text,
             state.unstable_raw_text,
             punc_model,
+            SENTENCE_END_PUNCTUATION,
             context_sentences=PUNC_CONTEXT_SENTENCES
         )
         text_for_split = f"{state.stable_punctuated_text}{temp_punctuated}"
     
     # 4. 分句：从标点化的文本中提取完整句子
-    complete_sentences, remaining_text = split_by_sentence_end(text_for_split)
+    complete_sentences, remaining_text = split_by_sentence_end(
+        text_for_split,
+        MIN_SENTENCE_CHARS,
+        SENTENCE_END_PUNCTUATION,
+    )
     sentences_to_commit = [s for s in complete_sentences if len(s.strip()) >= MIN_SENTENCE_CHARS]
 
     # 超过最大句子时长或结束块时强制提交
@@ -722,6 +481,7 @@ def handle_streaming_chunk(
             state.stable_punctuated_text,
             state.unstable_raw_text,
             punc_model,
+            SENTENCE_END_PUNCTUATION,
             context_sentences=PUNC_CONTEXT_SENTENCES
         )
         final_text = f"{state.stable_punctuated_text}{final_unstable}".strip()
@@ -773,7 +533,15 @@ def handle_batch_file(stream_model: AutoModel, punc_model: AutoModel, data: Dict
             audio_array = audio_array.mean(axis=1)
 
         # 批量识别
-        full_text = funasr_streaming_recognition(audio_array, stream_model, {}, is_final=True)
+        full_text = funasr_streaming_recognition(
+            audio_array,
+            stream_model,
+            {},
+            CHUNK_SIZE_LIST,
+            ENCODER_LOOK_BACK,
+            DECODER_LOOK_BACK,
+            is_final=True,
+        )
 
         # 应用标点
         punctuated_text = apply_punctuation(full_text, punc_model)
@@ -813,6 +581,7 @@ def handle_force_commit(data: Dict, sessions_cache: Dict[str, SessionState], pun
             state.stable_punctuated_text,
             state.unstable_raw_text,
             punc_model,
+            SENTENCE_END_PUNCTUATION,
             context_sentences=PUNC_CONTEXT_SENTENCES
         )
         final_text = f"{state.stable_punctuated_text}{final_unstable}".strip()
@@ -856,7 +625,11 @@ def main():
         sys.stderr.flush()
 
         # 加载模型
-        stream_model, punc_model, ts_model = load_funasr_models()
+        stream_model, punc_model, ts_model = load_funasr_models(
+            CACHE_DIR,
+            FUNASR_STRIDE_SAMPLES,
+            SAMPLE_RATE,
+        )
 
         sessions_cache: Dict[str, SessionState] = {}
         send_ipc_message({"status": "ready"})

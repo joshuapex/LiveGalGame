@@ -3,6 +3,7 @@ import { initMain as initAudioLoopback } from 'electron-audio-loopback';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { performance } from 'perf_hooks';
 
 // 初始化 electron-audio-loopback（必须在 app.whenReady 之前调用）
 initAudioLoopback();
@@ -24,6 +25,36 @@ let ipcManager;
 let shortcutManager;
 let asrPreloader;
 let permissionManager;
+
+/**
+ * 启动阶段耗时记录工具
+ * @param {string} label 标签
+ * @returns {() => void} 结束计时打印日志
+ */
+function startTimer(label) {
+  const start = performance.now();
+  return () => {
+    const cost = (performance.now() - start).toFixed(1);
+    console.log(`[Perf] ${label}: ${cost}ms`);
+  };
+}
+
+/**
+ * 监听主窗口加载事件以输出耗时
+ * @param {BrowserWindow} mainWindow
+ */
+function attachMainWindowPerf(mainWindow) {
+  if (!mainWindow) return;
+
+  const endReadyToShow = startTimer('mainWindow ready-to-show');
+  mainWindow.once('ready-to-show', () => endReadyToShow());
+
+  const endDomReady = startTimer('mainWindow dom-ready');
+  mainWindow.webContents.once('dom-ready', () => endDomReady());
+
+  const endDidFinishLoad = startTimer('mainWindow did-finish-load');
+  mainWindow.webContents.once('did-finish-load', () => endDidFinishLoad());
+}
 
 /**
  * 确保 ASR 缓存环境变量
@@ -159,35 +190,54 @@ function cleanup() {
 app.whenReady().then(async () => {
   console.log('Starting LiveGalGame Desktop...');
 
+  const endAppReadyPipeline = startTimer('app.whenReady pipeline');
+
   // 确保 ASR 缓存环境
+  const endEnsureCache = startTimer('ensureAsrCacheEnv');
   ensureAsrCacheEnv();
+  endEnsureCache();
 
   // 初始化所有管理器
+  const endInitManagers = startTimer('initializeManagers');
   initializeManagers();
+  endInitManagers();
 
   // 注册 IPC 处理器
   console.log('[Main] Registering IPC handlers...');
+  const endRegisterIPC = startTimer('ipcManager.registerHandlers');
   ipcManager.registerHandlers();
+  endRegisterIPC();
   console.log('[Main] IPC handlers registered successfully');
 
   // 注册桌面捕获器
   registerDesktopCapturer();
 
   // 创建主窗口
+  const endCreateWindow = startTimer('windowManager.createMainWindow');
   windowManager.createMainWindow(() => ipcManager.checkASRReady());
+  attachMainWindowPerf(windowManager.getMainWindow());
+  endCreateWindow();
 
   // 注册全局快捷键
+  const endRegisterShortcut = startTimer('shortcutManager.registerAll');
   shortcutManager.registerAll();
+  endRegisterShortcut();
 
   // 请求权限（macOS）
+  const endRequestPermissions = startTimer('permissionManager.requestStartupPermissions');
   await permissionManager.requestStartupPermissions();
+  endRequestPermissions();
 
   // 预加载ASR模型（后台进行，不阻塞UI）
-  asrPreloader.preload(() => ipcManager.checkASRReady()).catch(err => {
-    console.error('[ASR] 预加载失败，将在使用时加载:', err);
-  });
+  const endPreloadASR = startTimer('asrPreloader.preload (async)');
+  asrPreloader.preload(() => ipcManager.checkASRReady())
+    .then(() => endPreloadASR())
+    .catch(err => {
+      console.error('[ASR] 预加载失败，将在使用时加载:', err);
+    });
 
   setupAppEventListeners();
 
+  endAppReadyPipeline();
   console.log('LiveGalGame Desktop 启动成功！');
 });
