@@ -29,20 +29,19 @@ jobs:
             platform: mac
             arch: arm64
             artifact_path: |
-              desktop/dist/*-arm64*.dmg
-              desktop/dist/*-arm64*.zip
+              desktop/dist/*.dmg
+              desktop/dist/*.zip
           - os: macos-13
             platform: mac
             arch: x64
             artifact_path: |
-              desktop/dist/*-x64*.dmg
-              desktop/dist/*-x64*.zip
+              desktop/dist/*.dmg
+              desktop/dist/*.zip
           - os: windows-latest
             platform: win
             arch: x64
             artifact_path: |
-              desktop/dist/*Setup.exe
-              desktop/dist/*-x64*.exe
+              desktop/dist/*.exe
 
     defaults:
       run:
@@ -73,7 +72,8 @@ jobs:
 
       - name: Print app version
         id: meta
-        run: echo "app_version=$(node -p \"require('./package.json').version\")" >> "$GITHUB_OUTPUT"
+        run: |
+          node -e "const v=require('./package.json').version; console.log('app_version='+v)" >> "$GITHUB_OUTPUT"
 
       - name: Build desktop package
         run: |
