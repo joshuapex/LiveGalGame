@@ -73,6 +73,13 @@
 
 **Windows / macOS 应用** - 专为语音聊天场景设计的智能助手
 
+### macOS 安装提示（未签名）
+
+- 当前开源版本未做 Apple 官方签名/公证，直接双击 DMG 可能提示“应用已损坏/来自未被认可的开发者”。
+- 推荐做法：在 Finder 中控制键+点按 DMG 内的 `LiveGalGame.app`，选择“打开”，在弹窗中再次“打开”，系统将对本次豁免。（参考 [macguide.leavelet.io](https://macguide.leavelet.io/Bike/appnotopen.html)）
+- 如仍被拦截，可在终端移除隔离属性：`sudo xattr -r -d com.apple.quarantine "/Applications/LiveGalGame.app"`（请替换为实际路径）。
+- 临时放宽 Gatekeeper（风险较高，装完建议恢复）：`sudo spctl --master-disable`，安装后 `sudo spctl --master-enable`。
+
 ### 使用流程
 
 1. **创建对话对象**
