@@ -45,7 +45,7 @@ jobs:
             platform: win
             arch: x64
             python: python
-            asr: whisper
+            asr: funasr
             artifact_path: |
               desktop/dist/*.exe
 
