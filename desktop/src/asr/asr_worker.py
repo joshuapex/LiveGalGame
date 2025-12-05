@@ -106,31 +106,17 @@ MAX_SENTENCE_SECONDS = float(os.environ.get("MAX_SENTENCE_SECONDS", "15"))  # �
 SEGMENT_GAP_THRESHOLD = float(os.environ.get("SEGMENT_GAP_THRESHOLD", "0.5"))  # segment 间隙阈值
 
 
-MODEL_ALIAS_MAP = {
-    # Whisper GGML 模型别名映射
-    "ggml-base.bin": "base",
-    "ggml-small.bin": "small",
-    "ggml-medium.bin": "medium",
-    "ggml-large.bin": "large-v2",
-    "ggml-large-v2.bin": "large-v2",
-    "ggml-large-v3.bin": "large-v3",
-}
-
-
 def resolve_model_name() -> str:
     requested = os.environ.get("ASR_MODEL") or DEFAULT_MODEL_FALLBACK
 
     if not requested:
         return DEFAULT_MODEL_FALLBACK
 
-    candidate = requested.strip()
-    lower = candidate.lower()
-    if lower in MODEL_ALIAS_MAP:
-        return MODEL_ALIAS_MAP[lower]
-    if "/" in candidate or lower.startswith("fast") or lower.startswith("systran/"):
+    candidate = requested.strip().lower()
+    if "/" in candidate or candidate.startswith("fast") or candidate.startswith("systran/"):
         return candidate
-    if lower in {"tiny", "base", "small", "medium", "large", "large-v2", "large-v3"}:
-        return lower
+    if candidate in {"tiny", "base", "small", "medium", "large", "large-v2", "large-v3"}:
+        return candidate
     sys.stderr.write(f"[Worker] Unknown model alias '{candidate}', fallback to {DEFAULT_MODEL_FALLBACK}\n")
     sys.stderr.flush()
     return DEFAULT_MODEL_FALLBACK

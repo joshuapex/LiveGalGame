@@ -10,10 +10,7 @@
     "dev:electron": "cross-env NODE_ENV=development electron . --enable-logging",
     "dev:vite": "vite",
     "download-models": "node scripts/download-models.js",
-    "download-ggml-models": "node scripts/download-ggml-models.js",
-    "download-belle-whisper": "node scripts/download-belle-whisper-model.js",
     "update-asr-model": "node scripts/update-asr-model.js",
-    "setup-whisper-cpp": "bash scripts/setup-whisper-cpp.sh",
     "setup-funasr": "bash scripts/setup-funasr.sh",
     "build:native": "node-gyp rebuild --directory=src/native/system-audio-capture",
     "rebuild:better-sqlite3": "electron-rebuild -f -w better-sqlite3",
@@ -87,7 +84,6 @@
       "src/asr/**/*",
       "src/native/**/*",
       "models/**/*",
-      "third_party/whisper.cpp/examples/addon.node/build/**/*",
       "package.json"
     ],
     "extraResources": [
