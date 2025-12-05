@@ -36,10 +36,22 @@ class FunASRService {
     }
 
     const __dirname = path.dirname(fileURLToPath(import.meta.url));
-    this.workerScriptPath = path.join(__dirname, 'asr_funasr_worker.py');
+    this.workerScriptPath = this.resolveAsarUnpacked(
+      path.join(__dirname, 'asr_funasr_worker.py')
+    );
 
     logger.log(`[FunASR] Python path: ${this.pythonPath}`);
     logger.log(`[FunASR] Worker script: ${this.workerScriptPath}`);
+  }
+
+  /**
+   * asar 场景下，Python 进程无法直接读取 asar 内部文件，需要使用解包路径
+   */
+  resolveAsarUnpacked(targetPath) {
+    if (!targetPath) return targetPath;
+    return targetPath.includes('app.asar')
+      ? targetPath.replace('app.asar', 'app.asar.unpacked')
+      : targetPath;
   }
 
   setServerCrashCallback(callback) {

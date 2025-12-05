@@ -89,6 +89,11 @@
       "models/**/*",
       "package.json"
     ],
+    "asarUnpack": [
+      "src/asr/**/*.py",
+      "src/asr/**/*.json",
+      "src/asr/**/*.bin"
+    ],
     "extraResources": [
       {
         "from": "python-env",

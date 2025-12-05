@@ -1,5 +1,10 @@
 import path from 'path';
 import fs from 'fs';
+import { fileURLToPath } from 'url';
+
+// ESM 下补充 __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 export default function Utils(BaseClass) {
   return class extends BaseClass {
