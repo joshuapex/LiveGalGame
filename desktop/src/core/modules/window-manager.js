@@ -2,11 +2,22 @@ import electron from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-const { BrowserWindow, screen } = electron;
+const { app, BrowserWindow, screen } = electron;
 
 // 获取 __dirname 的 ESM 等效方式
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+/**
+ * 生产环境下获取打包后的渲染进程入口文件路径
+ * 开发环境下不会使用（dev 走 loadURL）
+ * @param {string} fileName
+ */
+function getRendererFilePath(fileName) {
+  // app.getAppPath() 会指向 app.asar 根目录，dist/renderer 位于其下一级
+  const appRoot = app.getAppPath();
+  return path.join(appRoot, 'dist', 'renderer', fileName);
+}
 
 /**
  * 窗口管理器 - 负责创建和管理应用窗口
@@ -69,7 +80,7 @@ export class WindowManager {
       this.mainWindow.loadURL('http://localhost:5173');
     } else {
       // 生产环境：加载构建后的文件
-      this.mainWindow.loadFile(path.join(__dirname, '../../dist/renderer/index.html'));
+      this.mainWindow.loadFile(getRendererFilePath('index.html'));
     }
 
     // 窗口准备就绪后显示
@@ -177,7 +188,7 @@ export class WindowManager {
         this.hudWindow.loadURL('http://localhost:5173/hud.html');
       } else {
         // 生产环境：从构建后的文件加载
-        this.hudWindow.loadFile(path.join(__dirname, '../../dist/renderer/hud.html'));
+        this.hudWindow.loadFile(getRendererFilePath('hud.html'));
       }
 
       // 页面加载完成后再显示
