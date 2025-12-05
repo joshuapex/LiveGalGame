@@ -31,23 +31,21 @@ jobs:
             python: python3.10
             asr: funasr
             artifact_path: |
-              desktop/dist/*.dmg
-              desktop/dist/*.zip
+              desktop/release/*.dmg
           - os: macos-13
             platform: mac
             arch: x64
             python: python3.10
             asr: funasr
             artifact_path: |
-              desktop/dist/*.dmg
-              desktop/dist/*.zip
+              desktop/release/*.dmg
           - os: windows-latest
             platform: win
             arch: x64
             python: python
             asr: faster-whisper
             artifact_path: |
-              desktop/dist/*.exe
+              desktop/release/*.exe
 
     defaults:
       run:

@@ -73,7 +73,7 @@
     "appId": "com.livegalgame.desktop",
     "productName": "LiveGalGame Desktop",
     "directories": {
-      "output": "dist"
+      "output": "release"
     },
     "files": [
       "dist/renderer/**/*",
@@ -100,7 +100,8 @@
       }
     ],
     "mac": {
-      "category": "public.app-category.productivity"
+      "category": "public.app-category.productivity",
+      "target": "dmg"
     },
     "win": {
       "target": "nsis"
