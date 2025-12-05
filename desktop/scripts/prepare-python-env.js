@@ -113,8 +113,8 @@ function ensureVenv(pythonCmd) {
     console.log(`[prepare-python-env] venv already exists: ${pythonPath}`);
     // 不 return，继续往下走以确保依赖最新
   } else {
-    console.log(`[prepare-python-env] creating venv via ${pythonCmd} -m venv "${venvDir}"`);
-    run(`"${pythonCmd}" -m venv "${venvDir}"`);
+  console.log(`[prepare-python-env] creating venv via ${pythonCmd} -m venv "${venvDir}"`);
+  run(`"${pythonCmd}" -m venv "${venvDir}"`);
   }
 }
 
@@ -142,6 +142,47 @@ function installDeps() {
   run(`"${pipPath}" install -r "${requirementsPath}"`, { env: envNoProxy });
 }
 
+/**
+ * 修复 venv 中的 Python 符号链接为实际文件副本
+ * venv 创建的符号链接是绝对路径，打包后在其他机器上会失效
+ */
+function fixPythonSymlinks() {
+  const binDir = path.join(venvDir, isWin ? 'Scripts' : 'bin');
+  const pythonLinks = isWin
+    ? ['python.exe', 'python3.exe']
+    : ['python', 'python3', `python${desiredPy}`];
+
+  for (const linkName of pythonLinks) {
+    const linkPath = path.join(binDir, linkName);
+    if (!fs.existsSync(linkPath)) {
+      continue;
+    }
+
+    try {
+      const stat = fs.lstatSync(linkPath);
+      if (!stat.isSymbolicLink()) {
+        continue; // 已经是实际文件，跳过
+      }
+
+      const target = fs.readlinkSync(linkPath);
+      // 检查是否是绝对路径的符号链接
+      if (path.isAbsolute(target) && fs.existsSync(target)) {
+        console.log(`[prepare-python-env] fixing symlink: ${linkName} -> ${target}`);
+        // 删除符号链接，复制实际文件
+        fs.unlinkSync(linkPath);
+        fs.copyFileSync(target, linkPath);
+        // 确保可执行权限
+        if (!isWin) {
+          fs.chmodSync(linkPath, 0o755);
+        }
+        console.log(`[prepare-python-env] replaced symlink with actual file: ${linkName}`);
+      }
+    } catch (err) {
+      console.warn(`[prepare-python-env] warning: failed to fix ${linkName}:`, err.message);
+    }
+  }
+}
+
 function main() {
   let pythonCmd = detectPython();
   if (!pythonCmd) {
@@ -149,6 +190,8 @@ function main() {
   }
   ensureVenv(pythonCmd);
   installDeps();
+  // 修复 venv 符号链接，确保打包后可用
+  fixPythonSymlinks();
   console.log('[prepare-python-env] done');
 }
 
