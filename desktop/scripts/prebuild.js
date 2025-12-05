@@ -16,8 +16,12 @@ const impl = (process.env.ASR_IMPL || 'funasr').toLowerCase();
 
 console.log(`[prebuild] ASR_IMPL=${impl}`);
 
-// 步骤 1：准备 Python 运行时
-run('npm run prepare:python');
+// 步骤 1：准备 Python 运行时（仅 FunASR 需要）
+if (impl === 'funasr') {
+  run('npm run prepare:python');
+} else {
+  console.log('[prebuild] ASR_IMPL!=funasr, skip python-env bootstrap');
+}
 
 // 步骤 2：可选下载 Whisper 模型
 if (impl === 'whisper') {
