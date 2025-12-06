@@ -63,6 +63,10 @@
 
 ### 下载
 
+[<img src="https://fdroid.gitlab.io/artwork/badge/get-it-on.png"
+     alt="Get it on F-Droid"
+     height="75">](https://f-droid.org/packages/com.jstone.livegalgame/)
+     
 - **GitHub Release**: [点击下载](https://github.com/JStone2934/LiveGalGame/tags)
 - **夸克网盘**: https://pan.quark.cn/s/1000136902b5
 - **百度网盘**: https://pan.baidu.com/s/1Bpt2DZNvjzT6BpKr8RyG-A?pwd=94g6
