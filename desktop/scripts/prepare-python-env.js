@@ -262,7 +262,7 @@ function main() {
     ensureCondaPackInstalled(pythonCmd);
     installCondaPackages([
       'ffmpeg',
-      'av=10.*',
+      'av=11.*',
     ]);
     installDeps();
     packCondaEnv();
