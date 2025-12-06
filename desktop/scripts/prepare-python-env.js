@@ -263,15 +263,14 @@ function main() {
     installCondaPackages([
       'ffmpeg',
       'av=10.*',
-      'faster-whisper=0.10.*',
     ]);
     installDeps();
     packCondaEnv();
     fixPythonSymlinks();
   } else {
-  ensureVenv(pythonCmd, { forceRebuild });
-  installDeps();
-  fixPythonSymlinks();
+    ensureVenv(pythonCmd, { forceRebuild });
+    installDeps();
+    fixPythonSymlinks();
   }
   console.log('[prepare-python-env] done');
 }
