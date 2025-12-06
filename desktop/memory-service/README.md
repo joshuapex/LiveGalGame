@@ -40,6 +40,28 @@ uv run main.py  # 默认 0.0.0.0:8000
    - `window.electronAPI.memoryQueryProfiles({ userId, projectId, topic, sub_topic, tag, time_from, time_to, limit })`
    - `window.electronAPI.memoryQueryEvents({ userId, projectId, tag, time_from, time_to, limit })`
 
+## 发行版建议（自动配置最佳实践）
+首选方案：将 Memory Service 打成独立可执行文件并随 Electron 分发，启动时自动托管，用户无需安装 Python。
+
+推荐步骤：
+1. 使用 PyInstaller 生成单文件可执行（示例）：
+   ```bash
+   cd desktop/memory-service
+   uv venv && source .venv/bin/activate
+   uv sync
+   pyinstaller --onefile --name memory-service main.py
+   ```
+   产物位于 `dist/memory-service`（macOS arm64 约 20–40 MB）。
+
+2. 在 Electron 主进程启动时：
+   - 检测 `resources/memory-service/memory-service` 是否存在；若无则解压/复制。
+   - 选取空闲端口（如 18000+随机），`spawn` 可执行并设置 `MEMORY_API_BASE_URL=http://127.0.0.1:<port>/` 后再创建窗口。
+   - 调用 `/health` 探活，进程退出时清理。
+
+3. macOS 发布需 codesign/notarize；未签名时用户需“右键打开”绕过 Gatekeeper。
+
+4. 开发者仍可用 uv 启动，保持兼容。
+
 ## 设计要点
 - 结构化过滤为主，不依赖向量检索；需要向量召回时可另行扩展。
 - 简单 SQLite 持久化，便于本地开发；如需多实例或持久化升级，可替换为 Postgres，修改 `create_engine` 连接串即可。
