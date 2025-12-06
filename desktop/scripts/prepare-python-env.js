@@ -17,6 +17,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, '..');
 const venvDir = path.join(projectRoot, 'python-env');
+const bootstrapDir = path.join(projectRoot, 'python-bootstrap');
+const miniforgePrefix = path.join(bootstrapDir, 'miniforge');
 const requirementsPath = path.join(projectRoot, 'requirements.txt');
 
 const isWin = process.platform === 'win32';
@@ -66,7 +68,6 @@ function bootstrapMiniforge() {
   const arch = process.arch === 'arm64' ? 'arm64' : 'x86_64';
   const installer = `Miniforge3-MacOSX-${arch}.sh`;
   const url = `https://github.com/conda-forge/miniforge/releases/latest/download/${installer}`;
-  const bootstrapDir = path.join(projectRoot, 'python-bootstrap');
 
   if (!fs.existsSync(bootstrapDir)) {
     fs.mkdirSync(bootstrapDir, { recursive: true });
@@ -96,17 +97,39 @@ function bootstrapMiniforge() {
     // ignore
   }
 
-  const prefix = path.join(bootstrapDir, 'miniforge');
-  if (!fs.existsSync(path.join(prefix, 'bin', 'python'))) {
+  if (!fs.existsSync(path.join(miniforgePrefix, 'bin', 'python'))) {
     console.log('[prepare-python-env] installing Miniforge (py310)...');
-    run(`bash "${installerPath}" -b -p "${prefix}"`);
+    run(`bash "${installerPath}" -b -p "${miniforgePrefix}"`);
   } else {
     console.log('[prepare-python-env] Miniforge already installed');
   }
 
-  const bundledPy = path.join(prefix, 'bin', 'python3');
+  const bundledPy = path.join(miniforgePrefix, 'bin', 'python3');
   console.log(`[prepare-python-env] using bootstrapped python: ${bundledPy}`);
   return bundledPy;
+}
+
+function ensureCondaEnv(miniforgePython, { forceRebuild = false } = {}) {
+  const condaBin = isWin
+    ? path.join(miniforgePrefix, 'Scripts', 'conda.exe')
+    : path.join(miniforgePrefix, 'bin', 'conda');
+
+  if (!fs.existsSync(condaBin)) {
+    throw new Error(`[prepare-python-env] conda not found at ${condaBin}, bootstrap Miniforge first`);
+  }
+
+  if (fs.existsSync(venvDir) && forceRebuild) {
+    console.log(`[prepare-python-env] removing existing env for rebuild: ${venvDir}`);
+    fs.rmSync(venvDir, { recursive: true, force: true });
+  }
+
+  if (fs.existsSync(pythonPath)) {
+    console.log(`[prepare-python-env] env already exists: ${pythonPath}`);
+    return;
+  }
+
+  console.log(`[prepare-python-env] creating conda env (Python ${desiredPy}) at ${venvDir}`);
+  run(`"${condaBin}" create -y -p "${venvDir}" python=${desiredPy} pip`);
 }
 
 function ensureVenv(pythonCmd, { forceRebuild = false } = {}) {
@@ -117,11 +140,11 @@ function ensureVenv(pythonCmd, { forceRebuild = false } = {}) {
 
   if (fs.existsSync(pythonPath)) {
     console.log(`[prepare-python-env] venv already exists: ${pythonPath}`);
-    // 不 return，继续往下走以确保依赖最新
-  } else {
-    console.log(`[prepare-python-env] creating venv via ${pythonCmd} -m venv "${venvDir}"`);
-    run(`"${pythonCmd}" -m venv "${venvDir}"`);
+    return;
   }
+
+  console.log(`[prepare-python-env] creating venv via ${pythonCmd} -m venv "${venvDir}"`);
+  run(`"${pythonCmd}" -m venv "${venvDir}"`);
 }
 
 function installDeps() {
@@ -146,6 +169,24 @@ function installDeps() {
 
   console.log(`[prepare-python-env] install requirements`);
   run(`"${pipPath}" install -r "${requirementsPath}"`, { env: envNoProxy });
+}
+
+function ensureCondaPackInstalled(miniforgePython) {
+  console.log('[prepare-python-env] ensure conda-pack is installed in base');
+  run(`"${miniforgePython}" -m pip install --upgrade conda-pack`);
+}
+
+function packCondaEnv() {
+  const tarPath = `${venvDir}.tar.gz`;
+  console.log(`[prepare-python-env] packing env with conda-pack -> ${tarPath}`);
+  run(`"${miniforgePrefix}/bin/conda-pack" -p "${venvDir}" -o "${tarPath}" -f`);
+
+  console.log(`[prepare-python-env] repacking env to make it relocatable`);
+  fs.rmSync(venvDir, { recursive: true, force: true });
+  fs.mkdirSync(venvDir, { recursive: true });
+  run(`tar -xzf "${tarPath}" -C "${venvDir}"`);
+  run(`"${path.join(venvDir, 'bin', 'conda-unpack')}"`);
+  fs.rmSync(tarPath, { force: true });
 }
 
 /**
@@ -204,10 +245,17 @@ function main() {
     pythonCmd = bootstrapMiniforge();
   }
 
-  ensureVenv(pythonCmd, { forceRebuild });
-  installDeps();
-  // 修复 venv 符号链接，确保打包后可用
-  fixPythonSymlinks();
+  if (isMac) {
+    ensureCondaEnv(pythonCmd, { forceRebuild });
+    ensureCondaPackInstalled(pythonCmd);
+    installDeps();
+    packCondaEnv();
+    fixPythonSymlinks();
+  } else {
+    ensureVenv(pythonCmd, { forceRebuild });
+    installDeps();
+    fixPythonSymlinks();
+  }
   console.log('[prepare-python-env] done');
 }
 
