@@ -17,6 +17,7 @@
     "rebuild:native": "electron-rebuild -f -w system_audio_capture",
     "postinstall": "pnpm run rebuild:better-sqlite3",
     "prepare:python": "node scripts/prepare-python-env.js",
+    "build:backend": "node scripts/build-backend.js",
     "prebuild": "node scripts/prebuild.js",
     "build": "npm run prebuild && vite build && electron-builder",
     "build:vite": "vite build",
@@ -63,10 +64,12 @@
     "node-addon-api": "^7.0.0",
     "openai": "^6.9.0",
     "kill-port": "^2.0.1",
+    "portfinder": "^1.0.32",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.28.0",
     "sharp": "0.34.5",
+    "tree-kill": "^1.2.2",
     "ws": "^8.18.3"
   },
   "build": {
@@ -84,24 +87,27 @@
       "src/shared/**/*",
       "src/utils/**/*",
       "src/db/**/*",
-      "src/asr/**/*",
       "src/native/**/*",
+      "backend/**/*",
       "models/**/*",
       "package.json"
     ],
     "asarUnpack": [
-      "src/asr/**/*.py",
-      "src/asr/**/*.json",
-      "src/asr/**/*.bin"
+      "backend/asr/**/*.py",
+      "backend/asr/**/*.json",
+      "backend/asr/**/*.bin"
     ],
     "extraResources": [
       {
-        "from": "python-env",
-        "to": "python-env"
-      },
-      {
         "from": "data",
         "to": "data"
+      },
+      {
+        "from": "backend/dist/asr-backend",
+        "to": "backend",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "mac": {
