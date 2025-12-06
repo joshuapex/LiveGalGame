@@ -84,6 +84,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.send('llm-start-suggestion-stream', payload);
     console.log('[Preload] llm-start-suggestion-stream sent successfully');
   },
+  // Memory Service (结构化画像/事件)
+  memoryQueryProfiles: (payload) => ipcRenderer.invoke('memory-query-profiles', payload),
+  memoryQueryEvents: (payload) => ipcRenderer.invoke('memory-query-events', payload),
   onSuggestionStreamStart: (callback) => {
     const listener = (event, data) => callback(data);
     ipcRenderer.on('llm-suggestion-stream-start', listener);

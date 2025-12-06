@@ -31,6 +31,7 @@ note right of Preload
     testLLMConnection()
     generateLLMSuggestions()
     detectTopicShift() / startSuggestionStream()
+    memory.queryProfiles()/queryEvents()
 end note
 
 ' ========== 主进程层 ==========
@@ -40,10 +41,10 @@ package "主进程层 Main Process" as MainProcess #E3F2FD {
     component "rate-limiter.js" as RateLimiter
 
     package "核心服务" as CoreServices #BBDEFB {
-        component "LLMSuggestionService" as LLMService
+        component "LLMSuggestionService (单主循环)" as LLMService
         component "context-builder.js" as ContextBuilder
         component "toon-parser.js" as ToonParser
-        component "situation-llm (fast)" as SituationLLM
+        component "situation-llm (fast 判定)" as SituationLLM
         component "auth-manager.js" as AuthManager
         component "model-router.js" as ModelRouter
         component "llm-resilience.js" as ResiliencePolicy
@@ -73,10 +74,15 @@ cloud "LLM Provider" as LLMCloud #F3E5F5 {
 }
 
 cloud "Memory Service (Sidecar)" as MemorySidecar #F0F4C3 {
-    component "Profile/Event API (FastAPI/Python)" as MemoryAPI
-    component "profile_extractor" as ExtractTopics
-    component "profile_merger" as MergeYolo
+    component "Profile/Event API (结构化存储)" as MemoryAPI
+    component "profile_extractor (Model-First)" as ExtractTopics
+    component "profile_merger (ADD/UPDATE/APPEND/ABORT)" as MergeYolo
     component "event_tracker" as EventTracker
+    note right of MemoryAPI
+        仅结构化过滤: topic/sub_topic/tag/time
+        无默认向量召回
+        长程摘要按需写入
+    end note
 }
 
 cloud "Observability" as Observability #FFFDE7 {
@@ -117,8 +123,8 @@ LLMService --> ResiliencePolicy : 超时/重试/熔断
 LLMService --> Telemetry : 记录日志与耗时
 LLMService --> ModelRouter : 模型路由
 LLMService --> AuthManager : 安全管理密钥
-LLMService --> MemoryAPI : 推送/获取用户记忆
-ContextBuilder --> MemoryAPI : 获取 Profile / Event 上下文
+LLMService --> MemoryAPI : 推送/获取画像与事件
+ContextBuilder --> MemoryAPI : 获取 Profile/Event（结构化过滤）
 
 LLMConfigDB --> SQLite
 SuggestionConfigDB --> SQLite

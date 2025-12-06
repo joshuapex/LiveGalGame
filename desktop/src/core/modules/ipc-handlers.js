@@ -3,10 +3,12 @@ import DatabaseManager from '../../db/database.js';
 import ASRManager from '../../asr/asr-manager.js';
 import ASRModelManager from '../../asr/model-manager.js';
 import LLMSuggestionService from './llm-suggestion-service.js';
+import MemoryService from './memory-service.js';
 import { registerWindowHandlers } from './ipc-handlers/window-handlers.js';
 import { registerDatabaseHandlers } from './ipc-handlers/database-handlers.js';
 import { registerLLMHandlers } from './ipc-handlers/llm-handlers.js';
 import { registerSuggestionHandlers } from './ipc-handlers/suggestion-handlers.js';
+import { registerMemoryHandlers } from './ipc-handlers/memory-handlers.js';
 import { registerASRModelHandlers } from './ipc-handlers/asr-model-handlers.js';
 import { registerASRAudioHandlers } from './ipc-handlers/asr-audio-handlers.js';
 import { registerMediaHandlers } from './ipc-handlers/media-handlers.js';
@@ -21,6 +23,7 @@ export class IPCManager {
     this.modelManager = null;
     this.asrManager = null;
     this.llmSuggestionService = null;
+    this.memoryService = null;
     this.asrModelPreloading = false;
     this.asrModelPreloaded = false;
     this.asrServerCrashCallback = null;
@@ -68,6 +71,15 @@ export class IPCManager {
   }
 
   /**
+   * 初始化 Memory Service（结构化画像/事件侧车）
+   */
+  initMemoryService() {
+    if (!this.memoryService) {
+      this.memoryService = new MemoryService();
+    }
+  }
+
+  /**
    * 注册所有 IPC 处理器
    */
   registerHandlers() {
@@ -76,10 +88,12 @@ export class IPCManager {
     this.initDatabase();
     this.initModelManager();
     this.initLLMSuggestionService();
+    this.initMemoryService();
     this.setupWindowHandlers();
     this.setupDatabaseHandlers();
     this.setupLLMHandlers();
     this.setupSuggestionHandlers();
+    this.setupMemoryHandlers();
     this.setupASRModelHandlers();
     this.setupASRAudioHandlers();
     this.setupMediaHandlers();
@@ -120,6 +134,14 @@ export class IPCManager {
       llmSuggestionService: this.llmSuggestionService,
       ensureSuggestionService: () => this.initLLMSuggestionService()
     });
+  }
+
+  /**
+   * 设置 Memory Service 相关 IPC 处理器
+   */
+  setupMemoryHandlers() {
+    this.initMemoryService();
+    registerMemoryHandlers({ memoryService: this.memoryService });
   }
 
   /**
