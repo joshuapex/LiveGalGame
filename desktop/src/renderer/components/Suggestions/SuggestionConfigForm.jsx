@@ -123,24 +123,45 @@ export const SuggestionConfigForm = ({
         </div>
       </div>
 
-      <div className="p-4 rounded-lg border border-border-light dark:border-border-dark flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <div className="p-4 rounded-lg border border-border-light dark:border-border-dark flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <p className="font-medium text-text-light dark:text-text-dark">话题转折检测</p>
+          <p className="font-medium text-text-light dark:text-text-dark">场景判断 LLM（situation_llm）</p>
           <p className="text-sm text-text-muted-light dark:text-text-muted-dark">
-            结合启发式和 LLM 判断对方是否抛出关键问题，再决定是否追加建议。
+            将实时对话片段交给专用模型，判断是否需要唤起选项生成；比通用模型更便宜、更快。
           </p>
         </div>
         <label className="inline-flex items-center gap-2 cursor-pointer">
           <span className="text-sm text-text-muted-light dark:text-text-muted-dark">
-            {form.topic_detection_enabled ? '已启用' : '已关闭'}
+            {form.situation_llm_enabled ? '已启用' : '已关闭'}
           </span>
           <input
             type="checkbox"
-            checked={form.topic_detection_enabled}
-            onChange={(e) => onUpdateField('topic_detection_enabled', e.target.checked)}
+            checked={form.situation_llm_enabled}
+            onChange={(e) => {
+              onUpdateField('situation_llm_enabled', e.target.checked);
+              onUpdateField('topic_detection_enabled', e.target.checked);
+            }}
             className="w-5 h-5 text-primary border-border-light dark:border-border-dark rounded focus:ring-primary"
           />
         </label>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <div>
+          <label className="block text-sm font-medium text-text-light dark:text-text-dark mb-1">
+            场景判断模型名称
+          </label>
+          <input
+            type="text"
+            value={form.situation_model_name || ''}
+            onChange={(e) => onUpdateField('situation_model_name', e.target.value)}
+            placeholder="gpt-4o-mini"
+            className="w-full px-3 py-2 border border-border-light dark:border-border-dark rounded-lg bg-surface-light dark:bg-surface-dark text-text-light dark:text-text-dark focus:outline-none focus:ring-2 focus:ring-primary/50"
+          />
+          <p className="text-xs text-text-muted-light dark:text-text-muted-dark mt-1">
+            仅用于判定“是否需要生成选项”，默认沿用全局模型；可填廉价/快速的模型名。
+          </p>
+        </div>
       </div>
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

@@ -116,7 +116,9 @@ CREATE TABLE IF NOT EXISTS suggestion_configs (
   cooldown_seconds INTEGER DEFAULT 30,
   context_message_limit INTEGER DEFAULT 10,
   topic_detection_enabled INTEGER DEFAULT 0,
+  situation_llm_enabled INTEGER DEFAULT 0,
   model_name TEXT DEFAULT 'gpt-4o-mini',
+  situation_model_name TEXT DEFAULT 'gpt-4o-mini',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );

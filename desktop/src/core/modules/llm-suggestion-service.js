@@ -4,10 +4,10 @@ import { createToonSuggestionStreamParser } from './toon-parser.js';
 const MIN_SUGGESTION_COUNT = 2;
 const MAX_SUGGESTION_COUNT = 5;
 const DEFAULT_MODEL = 'gpt-4o-mini';
+const DEFAULT_SITUATION_MODEL = 'gpt-4o-mini';
 const DEFAULT_TIMEOUT_MS = 1000 * 15;
 const STREAM_TIMEOUT_MS = 1000 * 30;
-
-const QUESTION_KEYWORDS = ['吗', '呢', '怎么', '为何', '可以', '能否', '要不要', '愿不愿意', '想不想', '行不行'];
+const DEFAULT_SITUATION_TIMEOUT_MS = 1000 * 5;
 
 export default class LLMSuggestionService {
   constructor(dbGetter) {
@@ -400,33 +400,33 @@ export default class LLMSuggestionService {
     ]);
   }
 
-  analyzeHeuristics(message) {
-    if (!message) {
-      return { shouldCheck: false, reason: 'no_message' };
-    }
-    const content = (message.content || message.text || '').trim();
-    if (!content) {
-      return { shouldCheck: false, reason: 'empty_content' };
-    }
-
-    const hasQuestionMark = /[?？]/.test(content);
-    const keywordHit = QUESTION_KEYWORDS.some((keyword) => content.includes(keyword));
-    const lengthy = content.length > 18;
-    const containsInvite = /(一起|要不要|可以|方便|安排|约|想不想|能|是否)/.test(content);
-
-    const shouldCheck = hasQuestionMark || keywordHit || containsInvite;
-    return {
-      shouldCheck,
-      reason: shouldCheck ? 'heuristic_positive' : 'heuristic_negative',
-      features: { hasQuestionMark, keywordHit, lengthy, containsInvite }
-    };
+  analyzeHeuristics() {
+    // 关键词启发式已禁用，直接放行由 LLM 判断
+    return { shouldCheck: true, reason: 'disabled', features: null };
   }
 
-  async detectTopicShift(payload = {}) {
+  clampConfidence(value) {
+    if (typeof value !== 'number' || Number.isNaN(value)) return null;
+    return Math.min(1, Math.max(0, value));
+  }
+
+  buildSituationPrompt(context, heuristicResult) {
+    return [
+      '你是 situation_llm，负责快速判定当前对话是否需要立即生成回复选项。',
+      '请只输出 JSON：{"should_intervene":true/false,"need_options":true/false,"trigger":"question|invite|message_burst|other","reason":"简短中文","confidence":0-1}',
+      '规则：提出问题/邀约/安排/确认/期待 → need_options=true；纯闲聊无决策点 → false；不确定时倾向 false。',
+      `【角色信息】${context.characterProfile}`,
+      '【对话历史】',
+      context.historyText
+    ].join('\n');
+  }
+
+  async evaluateSituation(payload = {}) {
     const { conversationId, characterId, messageLimit = 6 } = payload;
     const suggestionConfig = this.db.getSuggestionConfig();
-    if (!suggestionConfig?.topic_detection_enabled) {
-      return { shouldSuggest: false, reason: 'topic_detection_disabled' };
+    const llmEnabled = suggestionConfig?.situation_llm_enabled ?? suggestionConfig?.topic_detection_enabled;
+    if (!llmEnabled) {
+      return { shouldSuggest: false, shouldIntervene: false, reason: 'situation_llm_disabled' };
     }
 
     const context = buildSuggestionContext(this.db, {
@@ -437,38 +437,23 @@ export default class LLMSuggestionService {
 
     const history = context.history || [];
     if (!history.length) {
-      return { shouldSuggest: false, reason: 'no_history' };
+      return { shouldSuggest: false, shouldIntervene: false, reason: 'no_history' };
     }
 
-    const lastCharacterMessage = [...history].reverse().find((msg) => msg.sender === 'character');
-    const heuristicResult = this.analyzeHeuristics(lastCharacterMessage);
-    if (!heuristicResult.shouldCheck) {
-      return {
-        shouldSuggest: false,
-        reason: 'heuristic_rejected',
-        features: heuristicResult.features || null
-      };
-    }
+    const heuristicResult = this.analyzeHeuristics();
 
     const client = await this.ensureClient();
-    const modelName = this.resolveModelName(this.currentLLMConfig, suggestionConfig);
-    const prompt = [
-      '请你判断玩家是否需要立即做出回应，或当前对话是否出现话题转折/需要关键回复。',
-      '只输出JSON，格式为 {"should_suggest": true/false, "reason": "简要原因"}。',
-      '如果对方提出问题、约定、邀请或表达期待，需要返回 true。',
-      '如果内容只是陈述或闲聊，无需强制回复，返回 false。',
-      '请结合下方的对话片段：',
-      context.historyText
-    ].join('\n');
+    const modelName = this.resolveSituationModelName(this.currentLLMConfig, suggestionConfig);
+    const prompt = this.buildSituationPrompt(context, heuristicResult);
 
     const requestParams = {
       model: modelName,
-      temperature: 0.2,
-      max_tokens: 150,
+      temperature: 0,
+      max_tokens: 120,
       messages: [
         {
           role: 'system',
-          content: '你是对话分析器，负责判断是否需要尽快回复。'
+          content: '你是实时对话决策器，只返回 JSON，不输出任何其他文字。'
         },
         {
           role: 'user',
@@ -479,7 +464,7 @@ export default class LLMSuggestionService {
 
     let response;
     try {
-      console.log('LLM Topic Detection Request Debug Info:', {
+      console.log('Situation LLM Request Debug Info:', {
         payload,
         llmConfig: {
           id: this.currentLLMConfig.id,
@@ -492,10 +477,10 @@ export default class LLMSuggestionService {
 
       response = await this.runWithTimeout(
         client.chat.completions.create(requestParams),
-        8000
+        DEFAULT_SITUATION_TIMEOUT_MS
       );
     } catch (error) {
-      console.error('LLM Topic Detection Request Failed - Full Debug Info:', {
+      console.error('Situation LLM Request Failed - Full Debug Info:', {
         error: {
           message: error.message,
           status: error.status,
@@ -524,19 +509,31 @@ export default class LLMSuggestionService {
     }
 
     const raw = response?.choices?.[0]?.message?.content?.trim();
-    const parsed = this.extractJSON(raw);
-    if (!parsed) {
-      return {
-        shouldSuggest: false,
-        reason: 'llm_parse_failed',
-        features: heuristicResult.features || null
-      };
-    }
+    const parsed = this.extractJSON(raw) || {};
+    const shouldIntervene = Boolean(parsed.should_intervene ?? parsed.should_suggest ?? parsed.need_options);
+    const needOptions = Boolean(parsed.need_options ?? parsed.should_suggest ?? parsed.should_intervene);
 
     return {
-      shouldSuggest: Boolean(parsed.should_suggest),
+      shouldIntervene,
+      shouldSuggest: needOptions,
+      needOptions,
+      trigger: parsed.trigger || 'auto',
       reason: parsed.reason || 'llm_evaluation',
-      features: heuristicResult.features || null
+      confidence: this.clampConfidence(parsed.confidence),
+      features: null,
+      model: modelName
+    };
+  }
+
+  async detectTopicShift(payload = {}) {
+    const result = await this.evaluateSituation(payload);
+    return {
+      shouldSuggest: result.shouldSuggest,
+      reason: result.reason,
+      trigger: result.trigger,
+      confidence: result.confidence,
+      features: result.features || null,
+      model: result.model
     };
   }
 
@@ -551,5 +548,12 @@ export default class LLMSuggestionService {
     }
     return DEFAULT_MODEL;
   }
-}
 
+  resolveSituationModelName(llmConfig, suggestionConfig) {
+    const situationModel = suggestionConfig?.situation_model_name && suggestionConfig.situation_model_name.trim();
+    if (situationModel) {
+      return situationModel;
+    }
+    return this.resolveModelName(llmConfig, suggestionConfig) || DEFAULT_SITUATION_MODEL;
+  }
+}

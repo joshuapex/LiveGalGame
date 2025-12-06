@@ -1,0 +1,156 @@
+@startuml LiveGalGame LLM Architecture
+
+skinparam backgroundColor #FEFEFE
+skinparam componentStyle rectangle
+
+title LiveGalGame - LLM 集成架构图
+
+' ========== 角色定义 ==========
+actor "用户" as User
+actor "算法" as AlgoEngineer #LightBlue
+actor "开发" as DevEngineer #LightGreen
+
+' ========== 前端层 ==========
+package "前端层 Renderer Process" as Frontend #E8F5E9 {
+    component "Settings.jsx" as SettingsUI
+    component "useLLMConfig.js" as LLMConfigHook
+    component "useSuggestions.js" as SuggestionHook
+    component "useSuggestionConfig.js" as SuggestionCfgHook
+    component "LLMConfigForm.jsx" as ConfigForm
+    component "CompactHud.jsx" as HudUI
+}
+
+' ========== IPC 桥接层 ==========
+package "IPC 桥接层" as IPCBridge #FFF3E0 {
+    component "preload.js" as Preload
+}
+
+note right of Preload
+    暴露安全的 API:
+    saveLLMConfig()
+    testLLMConnection()
+    generateLLMSuggestions()
+    detectTopicShift() / startSuggestionStream()
+end note
+
+' ========== 主进程层 ==========
+package "主进程层 Main Process" as MainProcess #E3F2FD {
+    component "llm-handlers.js" as LLMHandlers
+    component "suggestion-handlers.js" as SuggestionHandlers
+    component "rate-limiter.js" as RateLimiter
+
+    package "核心服务" as CoreServices #BBDEFB {
+        component "LLMSuggestionService" as LLMService
+        component "context-builder.js" as ContextBuilder
+        component "toon-parser.js" as ToonParser
+        component "situation-llm (fast)" as SituationLLM
+        component "auth-manager.js" as AuthManager
+        component "model-router.js" as ModelRouter
+        component "llm-resilience.js" as ResiliencePolicy
+        component "llm-telemetry.js" as Telemetry
+    }
+    
+    package "数据层" as DataLayer #B3E5FC {
+        component "llm-config.js" as LLMConfigDB
+        component "suggestion-config.js" as SuggestionConfigDB
+        note right of SuggestionConfigDB
+            新增:
+            situation_llm_enabled
+            situation_model_name
+        end note
+        database "SQLite" as SQLite
+    }
+}
+
+' ========== 外部 LLM 服务 ==========
+cloud "LLM Provider" as LLMCloud #F3E5F5 {
+    component "OpenAI API" as OpenAI
+    component "Azure OpenAI" as AzureOpenAI
+    component "Ollama" as Ollama
+    component "vLLM" as vLLM
+    component "OpenRouter" as OpenRouter
+    component "Low-latency Model" as FastModel
+}
+
+cloud "Memory Service (Sidecar)" as MemorySidecar #F0F4C3 {
+    component "Profile/Event API (FastAPI/Python)" as MemoryAPI
+    component "profile_extractor" as ExtractTopics
+    component "profile_merger" as MergeYolo
+    component "event_tracker" as EventTracker
+}
+
+cloud "Observability" as Observability #FFFDE7 {
+    component "日志/指标/追踪" as LogsMetrics
+}
+
+note bottom of LLMCloud
+    统一契约: OpenAI Compatible API
+    POST /chat/completions
+    支持 SSE 流式输出
+end note
+
+' ========== 连接关系 ==========
+User --> SettingsUI : 配置 LLM
+User --> HudUI : 查看建议
+
+SettingsUI --> LLMConfigHook
+LLMConfigHook --> ConfigForm
+LLMConfigHook --> Preload : IPC invoke
+
+SuggestionHook --> Preload : IPC send
+HudUI --> SuggestionHook
+SuggestionCfgHook --> Preload : IPC invoke
+
+Preload --> RateLimiter
+RateLimiter --> LLMHandlers : 调用限流
+RateLimiter --> SuggestionHandlers : 调用限流
+
+LLMHandlers --> LLMConfigDB
+SuggestionHandlers --> LLMService
+SuggestionHandlers --> SuggestionConfigDB
+
+LLMService --> ContextBuilder : 构建上下文
+LLMService --> ToonParser : 解析响应
+LLMService --> LLMConfigDB : 获取配置
+LLMService --> SituationLLM : 话题/介入判定
+LLMService --> ResiliencePolicy : 超时/重试/熔断
+LLMService --> Telemetry : 记录日志与耗时
+LLMService --> ModelRouter : 模型路由
+LLMService --> AuthManager : 安全管理密钥
+LLMService --> MemoryAPI : 推送/获取用户记忆
+ContextBuilder --> MemoryAPI : 获取 Profile / Event 上下文
+
+LLMConfigDB --> SQLite
+SuggestionConfigDB --> SQLite
+
+ModelRouter --> OpenAI : OpenAI SDK
+ModelRouter --> AzureOpenAI
+ModelRouter --> Ollama
+ModelRouter --> vLLM
+ModelRouter --> OpenRouter
+SituationLLM --> FastModel
+AuthManager --> OpenAI
+AuthManager --> AzureOpenAI
+AuthManager --> OpenRouter
+Telemetry --> LogsMetrics
+
+' ========== 团队职责 ==========
+DevEngineer --> Frontend : 负责
+DevEngineer --> IPCBridge : 负责
+DevEngineer --> MainProcess : 负责
+
+AlgoEngineer ..> LLMCloud : 部署调优
+AlgoEngineer ..> LLMService : Prompt设计
+
+' ========== 图例 ==========
+legend right
+    |= 颜色 |= 含义 |
+    |<#E8F5E9>| 前端层 Renderer |
+    |<#FFF3E0>| IPC 桥接 |
+    |<#E3F2FD>| 主进程 Main |
+    |<#F3E5F5>| 外部 LLM 服务 |
+    |<#F0F4C3>| 外部记忆 Sidecar |
+    |<#FFFDE7>| 可观测性 |
+endlegend
+
+@enduml

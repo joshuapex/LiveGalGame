@@ -8,7 +8,9 @@ const DEFAULT_SUGGESTION_FORM = {
   message_threshold_count: 3,
   cooldown_seconds: 15,
   context_message_limit: 10,
-  topic_detection_enabled: false
+  topic_detection_enabled: false,
+  situation_llm_enabled: false,
+  situation_model_name: 'gpt-4o-mini'
 };
 
 /**
@@ -39,7 +41,13 @@ export const useSuggestionConfig = () => {
       message_threshold_count: coerceNumberValue(merged.message_threshold_count, DEFAULT_SUGGESTION_FORM.message_threshold_count),
       cooldown_seconds: coerceNumberValue(merged.cooldown_seconds, DEFAULT_SUGGESTION_FORM.cooldown_seconds),
       context_message_limit: coerceNumberValue(merged.context_message_limit, DEFAULT_SUGGESTION_FORM.context_message_limit),
-      topic_detection_enabled: Boolean(merged.topic_detection_enabled)
+      topic_detection_enabled: Boolean(merged.topic_detection_enabled),
+      situation_llm_enabled: Boolean(
+        merged.situation_llm_enabled !== undefined
+          ? merged.situation_llm_enabled
+          : merged.topic_detection_enabled
+      ),
+      situation_model_name: merged.situation_model_name || merged.model_name || DEFAULT_SUGGESTION_FORM.situation_model_name
     };
   }, []);
 
@@ -105,7 +113,9 @@ export const useSuggestionConfig = () => {
         message_threshold_count: coerceNumberValue(suggestionForm.message_threshold_count, DEFAULT_SUGGESTION_FORM.message_threshold_count),
         cooldown_seconds: coerceNumberValue(suggestionForm.cooldown_seconds, DEFAULT_SUGGESTION_FORM.cooldown_seconds),
         context_message_limit: coerceNumberValue(suggestionForm.context_message_limit, DEFAULT_SUGGESTION_FORM.context_message_limit),
-        topic_detection_enabled: suggestionForm.topic_detection_enabled ? 1 : 0
+        topic_detection_enabled: suggestionForm.topic_detection_enabled ? 1 : 0,
+        situation_llm_enabled: suggestionForm.situation_llm_enabled ? 1 : 0,
+        situation_model_name: suggestionForm.situation_model_name || null
       };
       await window.electronAPI.updateSuggestionConfig(payload);
       setSuggestionMessage('已保存');

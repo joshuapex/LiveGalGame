@@ -7,7 +7,9 @@ const DEFAULT_SUGGESTION_CONFIG = {
   message_threshold_count: 3,
   cooldown_seconds: 30,
   context_message_limit: 10,
-  topic_detection_enabled: 0
+  topic_detection_enabled: 0,
+  situation_llm_enabled: 0,
+  situation_model_name: 'gpt-4o-mini'
 };
 
 const PASSIVE_REASON_LABEL = {
@@ -17,7 +19,8 @@ const PASSIVE_REASON_LABEL = {
   manual: '手动触发'
 };
 
-const TOPIC_HEURISTIC_REGEX = /[?？]|(吗|呢|怎么|可以|愿不愿意|要不要|想不想|麻烦|拜托|一起|安排|帮|请)/;
+// 关键词启发式已停用，改为完全由 LLM 判定
+const TOPIC_HEURISTIC_REGEX = /.*/;
 
 /**
  * 建议生成和管理的自定义Hook
@@ -209,7 +212,9 @@ export const useSuggestions = (sessionInfo) => {
    * 运行话题检测
    */
   const maybeRunTopicDetection = useCallback(async (message) => {
-    if (!suggestionConfig?.topic_detection_enabled) return;
+    const detectionEnabled =
+      suggestionConfig?.situation_llm_enabled ?? suggestionConfig?.topic_detection_enabled;
+    if (!detectionEnabled) return;
     if (!message?.content || !message?.id) return;
     if (!sessionInfo?.conversationId || !sessionInfo?.characterId) return;
     if (!TOPIC_HEURISTIC_REGEX.test(message.content)) return;
@@ -238,7 +243,7 @@ export const useSuggestions = (sessionInfo) => {
         running: false
       };
     }
-  }, [sessionInfo, suggestionConfig?.topic_detection_enabled, triggerPassiveSuggestion]);
+  }, [sessionInfo, suggestionConfig?.topic_detection_enabled, suggestionConfig?.situation_llm_enabled, triggerPassiveSuggestion]);
 
   /**
    * 处理新消息
