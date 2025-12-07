@@ -176,8 +176,9 @@ function installDeps() {
     // 拆两步：先装依赖，再以 --no-deps 装 faster-whisper，彻底绕过 av 依赖解析
     const deps = [
       'ctranslate2==4.3.1',
+      // tokenizers 0.14.1 依赖 huggingface_hub <0.18
       'tokenizers==0.14.1',
-      'huggingface-hub==0.24.6',
+      'huggingface-hub==0.17.4',
       'tqdm>=4.66.3',
       'protobuf<5',
       'pyyaml',
