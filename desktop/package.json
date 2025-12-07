@@ -84,6 +84,7 @@
       "src/main.js",
       "src/preload.js",
       "src/core/**/*",
+      "src/asr/**/*",
       "src/shared/**/*",
       "src/utils/**/*",
       "src/db/**/*",

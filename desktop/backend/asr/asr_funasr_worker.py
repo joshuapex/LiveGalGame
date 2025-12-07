@@ -310,26 +310,6 @@ def handle_streaming_chunk(
     # 【优化1】立即更新显示文本（原始文本），不等待标点化
     # 让UI能够实时显示任何识别到的内容
     state.current_sentence.text = f"{state.stable_punctuated_text}{state.unstable_raw_text}"
-    
-    # 【优化2】先发送partial消息显示原始文本
-    current_buffer = state.current_sentence.text
-    if current_buffer:
-        incremental = extract_incremental_text(state.last_partial_text, current_buffer).strip()
-        if incremental:
-            send_ipc_message({
-                "request_id": request_id,
-                "session_id": session_id,
-                "type": "partial",
-                "text": incremental,
-                "full_text": current_buffer,
-                "timestamp": timestamp_ms,
-                "is_final": is_final,
-                "status": "success",
-                "language": "zh",
-            })
-            sys.stderr.write(f"[FunASR Worker] 📝 PARTIAL (raw): \"{incremental[:30]}...\"\n")
-            sys.stderr.flush()
-            state.last_partial_text = current_buffer
 
     # 【优化3】异步标点化 - 检查是否需要添加标点（防抖）
     current_time = time.time()
@@ -360,26 +340,31 @@ def handle_streaming_chunk(
             f"new_punc={len(new_punctuated)} chars\n"
         )
         sys.stderr.flush()
-        
-        # 【优化4】标点化后再次发送partial更新，优化显示效果
-        incremental_punc = extract_incremental_text(state.last_partial_text, state.current_sentence.text).strip()
-        if incremental_punc:
-            send_ipc_message({
-                "request_id": request_id,
-                "session_id": session_id,
-                "type": "partial",
-                "text": incremental_punc,
-                "full_text": state.current_sentence.text,
-                "timestamp": timestamp_ms,
-                "is_final": is_final,
-                "status": "success",
-                "language": "zh",
-            })
-            sys.stderr.write(f"[FunASR Worker] 📝 PARTIAL (punctuated): \"{incremental_punc[:30]}...\"\n")
-            sys.stderr.flush()
-            state.last_partial_text = state.current_sentence.text
+
+    # 3. 对齐 Faster-Whisper 的 partial 输出：只发送一次、包含历史文本
+    display_text = state.current_sentence.text.strip()
+    full_text_parts = state.completed_sentences.copy()
+    if display_text:
+        full_text_parts.append(display_text)
+    full_text = " ".join(full_text_parts).strip()
+    incremental_display = extract_incremental_text(state.last_partial_text, full_text).strip()
+    if incremental_display or is_final:
+        send_ipc_message({
+            "request_id": request_id,
+            "session_id": session_id,
+            "type": "partial",
+            "text": incremental_display,
+            "full_text": full_text,
+            "timestamp": timestamp_ms,
+            "is_final": is_final,
+            "status": "success",
+            "language": "zh",
+        })
+        sys.stderr.write(f"[FunASR Worker] 📝 PARTIAL: \"{incremental_display[:50]}...\"\n")
+        sys.stderr.flush()
+        state.last_partial_text = full_text
     
-    # 3. 对当前文本进行分句检查
+    # 4. 对当前文本进行分句检查
     text_for_split = state.current_sentence.text
     
     # 如果文本还未标点化，临时标点化用于分句判断
@@ -441,6 +426,7 @@ def handle_streaming_chunk(
                 "language": "zh",
                 "audio_duration": audio_duration,
                 "start_time": start_ms,
+                "end_time": int(chunk_end_time_ms),
             })
             sys.stderr.write(f"[FunASR Worker] 🎯 SENTENCE_COMPLETE: \"{final_sentence[:50]}...\"\n")
             sys.stderr.flush()
@@ -450,11 +436,12 @@ def handle_streaming_chunk(
         # 【关键修复】提交后清空所有缓冲区，重新开始
         # 由于分句逻辑基于标点化文本，无法准确映射回原始文本
         # 因此提交后清空，避免重复处理
+        transcript_prefix = " ".join(state.completed_sentences).strip()
         state.unstable_raw_text = ""
         state.raw_text_buffer = ""
         state.stable_punctuated_text = ""
         state.current_sentence.text = ""
-        state.last_partial_text = ""
+        state.last_partial_text = transcript_prefix
         state.last_punc_time = 0.0
         state.current_sentence.start_time = 0.0
         
@@ -498,20 +485,19 @@ def handle_streaming_chunk(
             "language": "zh",
             "audio_duration": audio_duration,
             "start_time": start_ms,
+            "end_time": int(chunk_end_time_ms),
             "trigger": "timeout" if not is_final else "final_chunk",
         })
         sys.stderr.write(f"[FunASR Worker] 🎯 FORCE_COMMIT: \"{final_text[:50]}...\"\n")
         sys.stderr.flush()
         state.completed_sentences.append(final_text)
         state.current_sentence = SentenceBuffer()
-        state.last_partial_text = ""
+        state.last_partial_text = " ".join(state.completed_sentences).strip()
         state.raw_text_buffer = ""
         state.stable_punctuated_text = ""
         state.unstable_raw_text = ""
         state.last_punc_time = 0.0
         return
-
-    # 注意：partial消息已经在前面发送过了（第545-587行区域），这里不再重复发送
 
 
 def handle_batch_file(stream_model: AutoModel, punc_model: AutoModel, data: Dict):
@@ -602,14 +588,16 @@ def handle_force_commit(data: Dict, sessions_cache: Dict[str, SessionState], pun
             "language": "zh",
             "start_time": start_ms,
             "audio_duration": 0,
+            "end_time": timestamp_ms,
         })
 
         # 记录已提交句子
         state.completed_sentences.append(final_text)
 
         # 重置状态
+        transcript_prefix = " ".join(state.completed_sentences).strip()
         state.current_sentence = SentenceBuffer()
-        state.last_partial_text = ""
+        state.last_partial_text = transcript_prefix
         state.raw_text_buffer = ""
         state.stable_punctuated_text = ""
         state.unstable_raw_text = ""
