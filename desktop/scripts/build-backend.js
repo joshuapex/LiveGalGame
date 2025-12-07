@@ -1,7 +1,9 @@
 /**
  * Build Python backend (FastAPI + workers) via PyInstaller.
- * - Windows: onefile exe（保持与参考项目一致，打包后仅有 exe，无需额外 Python 运行时）
- * - macOS/Linux: 继续使用 onedir（兼容现有流程）
+ * - 打包 main.py 为主入口 (asr-backend)
+ * - 同时打包每个 worker 为独立可执行文件 (asr-funasr-worker, asr-faster-whisper-worker)
+ * - Windows: onefile exe
+ * - macOS/Linux: onedir
  */
 import fs from 'fs';
 import { execSync } from 'child_process';
@@ -33,13 +35,11 @@ function resolvePython() {
 const pythonCmd = resolvePython();
 
 const backendDir = path.join(projectRoot, 'backend');
+const asrDir = path.join(backendDir, 'asr');
 const distDir = path.join(backendDir, 'dist');
 const buildDir = path.join(backendDir, 'build');
 const entryFile = path.join(backendDir, 'main.py');
 const isWin = process.platform === 'win32';
-const addDataArg = isWin
-  ? `--add-data "${path.join(backendDir, 'asr')};asr"`
-  : `--add-data "${path.join(backendDir, 'asr')}:asr"`;
 
 function run(cmd) {
   execSync(cmd, { stdio: 'inherit', cwd: projectRoot });
@@ -49,43 +49,89 @@ function ensureDirs() {
   [backendDir, distDir, buildDir].forEach((dir) => fs.mkdirSync(dir, { recursive: true }));
 }
 
-function main() {
-  console.log(`[build-backend] using python: ${pythonCmd}`);
-  console.log(`[build-backend] entry: ${entryFile}`);
-  ensureDirs();
-
+/**
+ * 打包单个 Python 脚本为可执行文件
+ * @param {string} scriptPath - Python 脚本路径
+ * @param {string} outputName - 输出名称（不含扩展名）
+ * @param {string} outputDir - 输出目录
+ */
+function buildExecutable(scriptPath, outputName, outputDir) {
+  console.log(`[build-backend] Building ${outputName} from ${scriptPath}`);
+  
   const baseArgs = [
     `"${pythonCmd}"`,
     '-m PyInstaller',
     '--clean',
     '-y',
-    '--name asr-backend',
-    addDataArg,
-    `--distpath "${distDir}"`,
+    `--name ${outputName}`,
+    `--distpath "${outputDir}"`,
     `--workpath "${buildDir}"`,
   ];
 
-  // Windows 改为 onefile，保持最终产物单一 exe；其他平台沿用 onedir
+  // Windows 用 onefile，其他平台用 onedir
   const modeArgs = isWin ? ['--onefile', '--noconsole'] : ['--onedir'];
 
-  const cmd = [...baseArgs, ...modeArgs, `"${entryFile}"`].join(' ');
-
+  const cmd = [...baseArgs, ...modeArgs, `"${scriptPath}"`].join(' ');
   run(cmd);
+}
 
-  // 将 Windows onefile exe 归档到 dist/asr-backend 下，维持现有资源路径
+function main() {
+  console.log(`[build-backend] using python: ${pythonCmd}`);
+  console.log(`[build-backend] entry: ${entryFile}`);
+  ensureDirs();
+
+  // 1. 打包主入口 asr-backend（不再 add-data worker 脚本，因为 worker 会单独打包）
+  console.log('[build-backend] Step 1: Building main asr-backend...');
+  const mainArgs = [
+    `"${pythonCmd}"`,
+    '-m PyInstaller',
+    '--clean',
+    '-y',
+    '--name asr-backend',
+    `--distpath "${distDir}"`,
+    `--workpath "${buildDir}"`,
+  ];
+  const mainModeArgs = isWin ? ['--onefile', '--noconsole'] : ['--onedir'];
+  const mainCmd = [...mainArgs, ...mainModeArgs, `"${entryFile}"`].join(' ');
+  run(mainCmd);
+
+  // 2. 打包 workers 到 asr-backend 目录内
+  const targetDir = path.join(distDir, 'asr-backend');
+  
+  // 确保目标目录存在
+  if (!fs.existsSync(targetDir)) {
+    fs.mkdirSync(targetDir, { recursive: true });
+  }
+
+  // 打包 funasr worker
+  const funasrWorker = path.join(asrDir, 'asr_funasr_worker.py');
+  if (fs.existsSync(funasrWorker)) {
+    console.log('[build-backend] Step 2: Building asr-funasr-worker...');
+    buildExecutable(funasrWorker, 'asr-funasr-worker', targetDir);
+  }
+
+  // 打包 faster-whisper worker
+  const fasterWhisperWorker = path.join(asrDir, 'asr_faster_whisper_worker.py');
+  if (fs.existsSync(fasterWhisperWorker)) {
+    console.log('[build-backend] Step 3: Building asr-faster-whisper-worker...');
+    buildExecutable(fasterWhisperWorker, 'asr-faster-whisper-worker', targetDir);
+  }
+
+  // Windows: 将 main onefile exe 移动到 dist/asr-backend 下
   if (isWin) {
     const exeSrc = path.join(distDir, 'asr-backend.exe');
-    const targetDir = path.join(distDir, 'asr-backend');
     const exeDst = path.join(targetDir, 'asr-backend.exe');
 
-    if (fs.existsSync(exeSrc)) {
-      fs.rmSync(targetDir, { recursive: true, force: true });
-      fs.mkdirSync(targetDir, { recursive: true });
+    if (fs.existsSync(exeSrc) && exeSrc !== exeDst) {
       fs.renameSync(exeSrc, exeDst);
-      console.log(`[build-backend] packaged onefile exe -> ${exeDst}`);
-    } else {
-      console.warn(`[build-backend] expected exe not found: ${exeSrc}`);
+      console.log(`[build-backend] moved main exe -> ${exeDst}`);
     }
+  }
+
+  console.log('[build-backend] Listing final artifacts:');
+  if (fs.existsSync(targetDir)) {
+    const files = fs.readdirSync(targetDir);
+    files.forEach((f) => console.log(`  - ${f}`));
   }
 
   console.log('[build-backend] done');
