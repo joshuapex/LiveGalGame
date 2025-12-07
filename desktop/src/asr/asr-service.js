@@ -230,9 +230,13 @@ class ASRService {
     this.engine = 'funasr';
     this.pythonPath = detectPythonPath();
     this.isInitialized = false;
+    this.lastProgressBytes = 0;
+    this.lastProgressTimestamp = 0;
     this.modelPreset = null;
     this.modelCacheDir = null;
     this.modelCacheFound = false;
+    this.modelCachePreDownloaded = false;
+    this.shouldReportProgress = true;
     this.serverProcess = null;
     this.serverHost = DEFAULT_HOST;
     this.serverPort = null;
@@ -241,6 +245,7 @@ class ASRService {
     this.onSentenceComplete = null;
     this.onPartialResult = null;
     this.onServerCrash = null;
+    this.progressEmitter = null;
     this.retainAudioFiles = false;
     this.audioStoragePath = path.join(app.getPath('temp'), 'asr');
     ensureDir(this.audioStoragePath);
@@ -248,6 +253,20 @@ class ASRService {
 
   setServerCrashCallback(callback) {
     this.onServerCrash = callback;
+  }
+
+  setProgressEmitter(emitter) {
+    this.progressEmitter = emitter;
+  }
+
+  emitDownloadProgress(payload = {}) {
+    if (typeof this.progressEmitter !== 'function') return;
+    this.progressEmitter({
+      modelId: this.modelName,
+      engine: this.engine,
+      source: payload.source || 'preload',
+      ...payload,
+    });
   }
 
   async initialize(modelName = 'funasr-paraformer', options = {}) {
@@ -294,6 +313,16 @@ class ASRService {
     const { cacheDir, found } = resolveModelCache(this.modelName);
     this.modelCacheDir = cacheDir;
     this.modelCacheFound = found;
+
+    // 计算已有缓存，若已下载完成则不再上报进度
+    const presetSize = this.modelPreset?.sizeBytes || null;
+    const repoPaths = getRepoPathsForModel(this.modelPreset, cacheDir);
+    const initialDownloaded = repoPaths.length ? repoPaths.reduce((sum, p) => sum + safeDirSize(p), 0) : 0;
+    const cachedEnough = presetSize
+      ? initialDownloaded >= presetSize * 0.9
+      : initialDownloaded > 50 * 1024 * 1024; // 没有 size 时粗判>50MB
+    this.modelCachePreDownloaded = cachedEnough;
+    this.shouldReportProgress = !cachedEnough;
 
     const env = {
       ...process.env,
@@ -353,17 +382,56 @@ class ASRService {
     await this.waitForHealth();
   }
 
-  async waitForHealth(timeoutMs = 180000) { // allow up to 3 minutes for first-time model download
+  async waitForHealth(timeoutMs = 180000) { // 默认 3 分钟，会在有下载进展时自动延长
     const start = Date.now();
+    const maxTimeoutMs = Math.max(timeoutMs, 15 * 60 * 1000); // 最长 15 分钟
+    let deadline = start + timeoutMs;
+    let lastProgressSeenAt = start;
     const url = `http://${this.serverHost}:${this.serverPort}/health`;
     const totalSize = this.modelPreset?.sizeBytes || null;
     const repoPaths = getRepoPathsForModel(this.modelPreset, this.modelCacheDir);
+    const calcDownloaded = () => {
+      if (!repoPaths || repoPaths.length === 0) return 0;
+      let downloaded = 0;
+      for (const p of repoPaths) {
+        downloaded += safeDirSize(p);
+      }
+      return downloaded;
+    };
 
-    while (Date.now() - start < timeoutMs) {
+    // 预先发送一次进度，便于 UI 立即显示（仅首次下载时）
+    if (this.shouldReportProgress && totalSize && repoPaths.length > 0) {
+      const initialDownloaded = calcDownloaded();
+      this.lastProgressBytes = initialDownloaded;
+      this.lastProgressTimestamp = Date.now();
+      this.emitDownloadProgress({
+        status: 'start',
+        downloadedBytes: initialDownloaded,
+        totalBytes: totalSize,
+        bytesPerSecond: 0,
+        activeDownload: true,
+      });
+    }
+
+    let lastReportAt = 0;
+    let lastLogAt = 0;
+
+    while (Date.now() < deadline) {
       try {
         // Node 20 has global fetch
         const res = await fetch(url, { method: 'GET' });
         if (res.ok) {
+          const finalDownloaded = calcDownloaded();
+          if (this.shouldReportProgress) {
+            this.emitDownloadProgress({
+              status: 'complete',
+              downloadedBytes: finalDownloaded,
+              totalBytes: totalSize || finalDownloaded,
+              bytesPerSecond: 0,
+              activeDownload: false,
+              isDownloaded: true,
+            });
+          }
           this.serverReady = true;
           return true;
         }
@@ -371,19 +439,55 @@ class ASRService {
         // ignore
       }
       const waited = Date.now() - start;
-      if (waited % 5000 < 600) { // roughly every 5s
-        let progressText = '';
-        if (totalSize && repoPaths.length > 0) {
-          let downloaded = 0;
-          for (const p of repoPaths) {
-            downloaded += safeDirSize(p);
+      const now = Date.now();
+
+      // 进度上报（每秒一次，避免频繁扫描目录）
+      if (this.shouldReportProgress && now - lastReportAt >= 1000 && repoPaths.length > 0) {
+        const downloaded = calcDownloaded();
+        const deltaBytes = downloaded - this.lastProgressBytes;
+        const deltaMs = now - this.lastProgressTimestamp || 1;
+        const bytesPerSecond = deltaMs > 0 ? deltaBytes / (deltaMs / 1000) : 0;
+        this.lastProgressBytes = downloaded;
+        this.lastProgressTimestamp = now;
+        lastReportAt = now;
+
+        this.emitDownloadProgress({
+          status: 'progress',
+          downloadedBytes: downloaded,
+          totalBytes: totalSize || downloaded,
+          bytesPerSecond,
+          activeDownload: true,
+        });
+        if (deltaBytes > 0) {
+          lastProgressSeenAt = now;
+          // 有进展则滚动延时，最多不超过 maxTimeoutMs
+          const extended = Math.min(start + maxTimeoutMs, now + 120000); // 额外给 2 分钟窗口
+          if (extended > deadline) {
+            deadline = extended;
           }
-          const pct = Math.min(99, Math.max(0, Math.round((downloaded / totalSize) * 100)));
-          progressText = ` (approx ${pct}% of model cached)`;
         }
-        logger.log(`[ASR] Waiting for backend health... ${Math.round(waited / 1000)}s elapsed${progressText}`);
+
+        // 日志保持原有节奏（约 5s 一次）
+        if (now - lastLogAt >= 5000) {
+          let progressText = '';
+          if (totalSize) {
+            const pct = Math.min(99, Math.max(0, Math.round((downloaded / totalSize) * 100)));
+            progressText = ` (approx ${pct}% of model cached)`;
+          }
+          logger.log(`[ASR] Waiting for backend health... ${Math.round(waited / 1000)}s elapsed${progressText}`);
+          lastLogAt = now;
+        }
       }
       await delay(500);
+    }
+    if (this.shouldReportProgress) {
+      this.emitDownloadProgress({
+        status: 'error',
+        downloadedBytes: this.lastProgressBytes,
+        totalBytes: totalSize || this.lastProgressBytes,
+        activeDownload: false,
+        message: 'FastAPI backend health check timeout',
+      });
     }
     throw new Error('FastAPI backend health check timeout');
   }

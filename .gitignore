@@ -29,3 +29,6 @@ signing.properties
 /desktop/tests
 desktop/src/data
 .cursor
+desktop/.venv310
+desktop/python-env
+desktop/python-bootstrap

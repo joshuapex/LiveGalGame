@@ -174,8 +174,6 @@ function installDeps() {
   if (isWin) {
     console.log('[prepare-python-env] install Windows subset (skip funasr)');
     const winPkgs = [
-      'torch==2.2.2',
-      'torchaudio==2.2.2',
       'faster-whisper==0.10.0',
       'soundfile>=0.12.1',
       'numpy<2',
@@ -183,14 +181,11 @@ function installDeps() {
       'fastapi>=0.115.0',
       'uvicorn[standard]>=0.30.0',
       'websockets>=12.0',
+      // PyInstaller 用于将 backend/main.py 打成 onedir 可执行目录
+      'pyinstaller>=6.3.0',
       'python-multipart>=0.0.9',
     ];
-    // 与 requirements 同步，使用 PyTorch CPU 源，避免拉不到轮子
-    const torchIndex = 'https://download.pytorch.org/whl/cpu';
-    run(
-      `"${pythonPath}" -m pip install --no-cache-dir --extra-index-url ${torchIndex} ${winPkgs.join(' ')}`,
-      { env: envNoProxy }
-    );
+    run(`"${pythonPath}" -m pip install --no-cache-dir ${winPkgs.join(' ')}`, { env: envNoProxy });
     return;
   }
 

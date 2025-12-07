@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 
 /**
  * 消息管理的自定义Hook
@@ -8,6 +8,7 @@ export const useMessages = (conversationId) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const transcriptRef = useRef(null);
+  const [streamingMessages, setStreamingMessages] = useState({});
 
   /**
    * 加载消息
@@ -65,9 +66,11 @@ export const useMessages = (conversationId) => {
   // 当conversationId变化时，重新加载消息
   useEffect(() => {
     if (conversationId) {
+      setStreamingMessages({});
       loadMessages();
     } else {
       setMessages([]);
+      setStreamingMessages({});
       setLoading(false);
     }
   }, [conversationId, loadMessages]);
@@ -75,7 +78,7 @@ export const useMessages = (conversationId) => {
   // 当消息变化时，自动滚动到底部
   useEffect(() => {
     scrollToBottom();
-  }, [messages, scrollToBottom]);
+  }, [messages, streamingMessages, scrollToBottom]);
 
   // 设置消息监听器
   useEffect(() => {
@@ -104,6 +107,17 @@ export const useMessages = (conversationId) => {
 
         // 默认：ASRManager 已经写入数据库并返回 message 记录
         addMessage(message);
+
+        // 同步清理对应 source 的流式气泡
+        const sourceKey = message.source_id || message.sourceId;
+        if (sourceKey) {
+          setStreamingMessages((prev) => {
+            if (!prev[sourceKey]) return prev;
+            const next = { ...prev };
+            delete next[sourceKey];
+            return next;
+          });
+        }
       } catch (error) {
         console.error('Error handling ASR result:', error);
         setError(`处理识别结果失败：${error.message}`);
@@ -137,12 +151,70 @@ export const useMessages = (conversationId) => {
     };
   }, [conversationId, addMessage, updateMessage]);
 
+  // 监听流式 partial 更新，让同一条消息持续增长
+  useEffect(() => {
+    const api = window.electronAPI;
+    if (!api?.on || !conversationId) return;
+
+    const handlePartialUpdate = (payload = {}) => {
+      // 仅处理当前会话
+      if (payload.conversationId && payload.conversationId !== conversationId) return;
+
+      const content = (payload.content || payload.text || payload.partialText || payload.fullText || '').trim();
+      if (!content) return;
+
+      const sourceId = payload.sourceId || payload.sessionId;
+      if (!sourceId) return;
+
+      const sender = sourceId === 'speaker1' ? 'user' : 'character';
+      const timestamp = payload.timestamp || Date.now();
+
+      setStreamingMessages((prev) => ({
+        ...prev,
+        [sourceId]: {
+          id: `stream-${sourceId}`,
+          sender,
+          content,
+          timestamp
+        }
+      }));
+    };
+
+    const handlePartialClear = (payload = {}) => {
+      if (payload.conversationId && payload.conversationId !== conversationId) return;
+      const key = payload.sourceId || payload.sessionId;
+      if (!key) return;
+      setStreamingMessages((prev) => {
+        if (!prev[key]) return prev;
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+    };
+
+    api.on('asr-partial-update', handlePartialUpdate);
+    api.on('asr-partial-clear', handlePartialClear);
+
+    return () => {
+      api.removeListener('asr-partial-update', handlePartialUpdate);
+      api.removeListener('asr-partial-clear', handlePartialClear);
+    };
+  }, [conversationId]);
+
+  const messagesWithStreaming = useMemo(() => {
+    const streamingList = Object.values(streamingMessages);
+    if (!streamingList.length) return messages;
+    return [...messages, ...streamingList].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+  }, [messages, streamingMessages]);
+
   return {
     // 状态
-    messages,
+    messages: messagesWithStreaming,
+    baseMessages: messages,
     loading,
     error,
     transcriptRef,
+    streamingMessages,
 
     // 方法
     loadMessages,

@@ -101,9 +101,10 @@ DEFAULT_MODEL_FALLBACK = "base"
 # 分句配置
 SENTENCE_END_PUNCTUATION = set("。！？!?.；;")  # 句末标点
 CLAUSE_PUNCTUATION = set("，,、：:")  # 分句标点
-MIN_SENTENCE_CHARS = int(os.environ.get("MIN_SENTENCE_CHARS", "4"))  # 最短句子字符数
+# 提高最短句子长度和段间停顿阈值，避免轻微停顿就提前断句
+MIN_SENTENCE_CHARS = int(os.environ.get("MIN_SENTENCE_CHARS", "6"))  # 最短句子字符数
 MAX_SENTENCE_SECONDS = float(os.environ.get("MAX_SENTENCE_SECONDS", "15"))  # 最长句子时长
-SEGMENT_GAP_THRESHOLD = float(os.environ.get("SEGMENT_GAP_THRESHOLD", "0.5"))  # segment 间隙阈值
+SEGMENT_GAP_THRESHOLD = float(os.environ.get("SEGMENT_GAP_THRESHOLD", "1.2"))  # segment 间隙阈值
 
 
 def resolve_model_name() -> str:
