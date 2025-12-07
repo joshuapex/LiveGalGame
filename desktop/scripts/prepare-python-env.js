@@ -185,7 +185,9 @@ function installDeps() {
       'pyinstaller>=6.3.0',
       'python-multipart>=0.0.9',
     ];
-    run(`"${pythonPath}" -m pip install --no-cache-dir ${winPkgs.join(' ')}`, { env: envNoProxy });
+    // Windows cmd 会把 >= 解析为重定向，逐一加引号防止误判
+    const winPkgsEscaped = winPkgs.map((pkg) => `"${pkg}"`).join(' ');
+    run(`"${pythonPath}" -m pip install --no-cache-dir ${winPkgsEscaped}`, { env: envNoProxy });
     return;
   }
 
