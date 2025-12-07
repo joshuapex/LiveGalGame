@@ -174,6 +174,8 @@ function installDeps() {
   if (isWin) {
     console.log('[prepare-python-env] install Windows subset (skip funasr)');
     const winPkgs = [
+      // 避免 pip 解析到较新版本缺 wheel，再 fallback 编译
+      'av==10.0.0',
       'faster-whisper==0.10.0',
       'soundfile>=0.12.1',
       'numpy<2',
@@ -195,7 +197,14 @@ function installDeps() {
         fs.rmSync(pipLog, { force: true });
       }
       const pipCmd = `"${pythonPath}" -m pip install --no-cache-dir --progress-bar off --log "${pipLog}" ${winPkgsEscaped}`;
-      run(pipCmd, { env: envNoProxy });
+      run(pipCmd, {
+        env: {
+          ...envNoProxy,
+          // 强制 av 走 wheel，避免缺少 FFmpeg 开发库导致源码编译失败
+          PIP_ONLY_BINARY: 'av',
+          PIP_PREFER_BINARY: '1',
+        },
+      });
     } catch (err) {
       pipErr = err;
     } finally {
