@@ -23,6 +23,7 @@ class ASRManager {
 
     // 当前对话 ID
     this.currentConversationId = null;
+    this.modelName = null;
 
     // 活跃识别任务
     this.activeTranscriptions = new Map(); // sourceId -> Promise
@@ -61,6 +62,22 @@ class ASRManager {
   setEventEmitter(emitter) {
     this.eventEmitter = emitter;
     logger.log('Event emitter set for ASRManager');
+    if (emitter && this.whisperService?.setProgressEmitter) {
+      this.whisperService.setProgressEmitter((progress) => this.emitDownloadProgress(progress));
+    }
+  }
+
+  emitDownloadProgress(progress) {
+    if (!this.eventEmitter) {
+      return;
+    }
+    const payload = {
+      modelId: progress?.modelId || this.modelName,
+      engine: progress?.engine || this.whisperService?.engine,
+      source: progress?.source || 'preload',
+      ...progress
+    };
+    this.eventEmitter('asr-model-download-progress', payload);
   }
 
   /**
@@ -100,8 +117,20 @@ class ASRManager {
 
 
       // 确定模型名称：优先使用配置中的值，默认为 'funasr-paraformer' (FunASR)
-      const modelName = config.model_name || 'funasr-paraformer';
+      let modelName = config.model_name || 'funasr-paraformer';
+      if (process.platform === 'win32' && modelName.startsWith('funasr')) {
+        logger.log(`Windows 检测到 FunASR，切换为 faster-whisper base`);
+        modelName = 'base';
+      }
+      this.modelName = modelName;
       logger.log(`Selected ASR model: ${modelName}`);
+
+      if (this.eventEmitter && typeof this.whisperService.setProgressEmitter === 'function') {
+        this.whisperService.setProgressEmitter((progress) => this.emitDownloadProgress({
+          ...progress,
+          modelId: progress?.modelId || modelName
+        }));
+      }
 
       // 初始化 Whisper 服务
       // 模型名称直接从配置获取，不再进行特定服务的名称转换
@@ -180,12 +209,12 @@ class ASRManager {
         }
 
         const normalizedResult = this.normalizeText(trimmedText);
-        const punctuatedText = await this.applyPunctuationIfAvailable(normalizedResult, sourceId);
-        result.text = punctuatedText;
+        // 先使用未加标点的文本，后续异步补标点
+        result.text = normalizedResult;
         const record = await this.saveRecognitionRecord(sourceId, result);
 
         // 添加到去重缓存
-        this.addToRecognitionCache(sourceId, punctuatedText, result.endTime);
+        this.addToRecognitionCache(sourceId, normalizedResult, result.endTime);
 
         return {
           ...result,
@@ -369,22 +398,15 @@ class ASRManager {
         const normalizedText = this.normalizeText(finalText);
         logger.log(`Normalized text: "${normalizedText}" (length: ${normalizedText.length})`);
 
-        // 【优化】2-pass 结果已经很准确，标点处理可选
-        let punctuatedText = normalizedText;
-        if (!is2Pass) {
-          // 只对非 2-pass 结果应用标点（2-pass 通常自带标点）
-          punctuatedText = await this.applyPunctuationIfAvailable(normalizedText, sourceId);
-        }
-        logger.log(`Punctuated text: "${punctuatedText}" (length: ${punctuatedText ? punctuatedText.length : 0})`);
-
-        if (!punctuatedText || !punctuatedText.trim()) {
-          logger.log(`Final sentence empty after normalization, skip saving: "${punctuatedText}"`);
+        // 先保存未加标点的文本，异步补标点
+        if (!normalizedText || !normalizedText.trim()) {
+          logger.log(`Final sentence empty after normalization, skip saving: "${normalizedText}"`);
           return null;
         }
 
         logger.log(`Saving recognition record for conversation: ${this.currentConversationId}`);
         const record = await this.saveRecognitionRecord(sourceId, {
-          text: punctuatedText,
+          text: normalizedText,
           confidence: is2Pass ? 0.98 : 0.95, // 2-pass 结果置信度更高
           startTime: Date.now() - this.SILENCE_TIMEOUT,
           endTime: Date.now(),
@@ -394,18 +416,26 @@ class ASRManager {
         });
 
         if (!record) {
-          logger.error(`Failed to save recognition record for: "${punctuatedText}"`);
+          logger.error(`Failed to save recognition record for: "${normalizedText}"`);
           return null;
         }
 
         logger.log(`Recognition record saved: ${record.id}`);
 
         // 添加到去重缓存
-        this.addToRecognitionCache(sourceId, punctuatedText, Date.now());
+        this.addToRecognitionCache(sourceId, normalizedText, Date.now());
 
         // 【UI更新】发送正式消息
         const message = await this.convertRecordToMessage(record.id, this.currentConversationId);
         logger.log(`Message created from speech: ${message.id}`);
+
+        // 异步补标点并更新
+        this.enqueuePunctuationUpdate({
+          recordId: record.id,
+          messageId: message.id,
+          text: normalizedText,
+          sourceId
+        });
 
         return message;
       }
@@ -718,6 +748,35 @@ class ASRManager {
     return text;
   }
 
+  /**
+   * 异步补标点并更新记录与消息
+   */
+  enqueuePunctuationUpdate({ recordId, messageId, text, sourceId }) {
+    if (!text || !recordId || !messageId) return;
+    (async () => {
+      try {
+        const punctuated = await this.applyPunctuationIfAvailable(text, sourceId);
+        if (!punctuated || punctuated === text) {
+          return;
+        }
+        // 更新语音记录
+        this.db.updateSpeechRecord(recordId, {
+          recognized_text: punctuated
+        });
+        // 更新消息
+        const updatedMessage = this.db.updateMessage(messageId, {
+          content: punctuated
+        });
+        if (updatedMessage && this.eventEmitter) {
+          updatedMessage.source_id = sourceId;
+          this.eventEmitter('asr-sentence-update', updatedMessage);
+        }
+      } catch (err) {
+        logger.warn(`Punctuation async update failed: ${err.message}`);
+      }
+    })();
+  }
+
   clearAllSilenceTimers() {
     for (const timer of this.silenceTimers.values()) {
       clearTimeout(timer);
@@ -805,6 +864,14 @@ class ASRManager {
           this.eventEmitter('asr-sentence-update', updatedMessage);
         }
 
+        // 异步补标点并再次更新
+        this.enqueuePunctuationUpdate({
+          recordId: currentSegment.recordId,
+          messageId: currentSegment.messageId,
+          text: normalizedText,
+          sourceId: sessionId
+        });
+
         return updatedMessage;
       }
 
@@ -851,6 +918,14 @@ class ASRManager {
       } else {
         logger.warn('[Sentence Complete] No event emitter set, UI will not update in real-time');
       }
+
+      // 异步补标点并更新
+      this.enqueuePunctuationUpdate({
+        recordId: record.id,
+        messageId: message.id,
+        text: normalizedText,
+        sourceId: sessionId
+      });
 
       // 清除静音定时器（句子已由 Python 端提交）
       const pendingTimer = this.silenceTimers.get(sessionId);
