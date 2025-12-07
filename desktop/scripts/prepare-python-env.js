@@ -178,7 +178,8 @@ function installDeps() {
       'ctranslate2==4.3.1',
       // tokenizers 0.14.1 依赖 huggingface_hub <0.18
       'tokenizers==0.14.1',
-      'huggingface-hub==0.17.4',
+      // 某些镜像缺少 0.17.4，降级一档保持 <0.18 约束
+      'huggingface-hub==0.17.3',
       'tqdm>=4.66.3',
       'protobuf<5',
       'pyyaml',

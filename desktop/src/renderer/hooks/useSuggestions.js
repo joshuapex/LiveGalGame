@@ -44,10 +44,26 @@ export const useSuggestions = (sessionInfo) => {
       if (!api?.getSuggestionConfig) return;
       const config = await api.getSuggestionConfig();
       if (config) {
-        setSuggestionConfig({
+        const normalized = {
           ...DEFAULT_SUGGESTION_CONFIG,
-          ...config
-        });
+          ...config,
+          // 将数据库返回的 0/1 或字符串 '0'/'1' 统一转成布尔，避免 '0' 被当作真值
+          enable_passive_suggestion:
+            config.enable_passive_suggestion === 1 ||
+            config.enable_passive_suggestion === true ||
+            config.enable_passive_suggestion === '1',
+          suggestion_count: Number(config.suggestion_count ?? DEFAULT_SUGGESTION_CONFIG.suggestion_count),
+          silence_threshold_seconds: Number(config.silence_threshold_seconds ?? DEFAULT_SUGGESTION_CONFIG.silence_threshold_seconds),
+          message_threshold_count: Number(config.message_threshold_count ?? DEFAULT_SUGGESTION_CONFIG.message_threshold_count),
+          cooldown_seconds: Number(config.cooldown_seconds ?? DEFAULT_SUGGESTION_CONFIG.cooldown_seconds),
+          context_message_limit: Number(config.context_message_limit ?? DEFAULT_SUGGESTION_CONFIG.context_message_limit),
+          topic_detection_enabled:
+            config.topic_detection_enabled === 1 ||
+            config.topic_detection_enabled === true ||
+            config.topic_detection_enabled === '1'
+        };
+        console.log('[useSuggestions] Loaded suggestion config (normalized):', JSON.stringify(normalized));
+        setSuggestionConfig(normalized);
       }
     } catch (err) {
       console.error('加载建议配置失败：', err);
@@ -58,7 +74,10 @@ export const useSuggestions = (sessionInfo) => {
    * 检查是否可以触发被动建议
    */
   const canTriggerPassive = useCallback(() => {
-    if (!suggestionConfig?.enable_passive_suggestion) return false;
+    if (!suggestionConfig?.enable_passive_suggestion) {
+      console.log('[useSuggestions] Passive suggestion disabled by config');
+      return false;
+    }
     const cooldownMs = (suggestionConfig?.cooldown_seconds || 30) * 1000;
     const elapsed = Date.now() - (suggestionCooldownRef.current || 0);
     return elapsed >= cooldownMs;
@@ -124,6 +143,12 @@ export const useSuggestions = (sessionInfo) => {
    */
   const handleGenerateSuggestions = useCallback(
     async ({ trigger = 'manual', reason = 'manual' } = {}) => {
+      // 被动关闭时，直接拒绝触发
+      if (trigger === 'passive' && suggestionConfig?.enable_passive_suggestion !== true) {
+        console.log('[useSuggestions] Passive suggestion blocked by config');
+        return;
+      }
+
       if (!sessionInfo?.conversationId || !sessionInfo?.characterId) {
         setSuggestionError('请先选择有效的会话');
         return;
@@ -521,7 +546,11 @@ export const useSuggestions = (sessionInfo) => {
     const handler = () => {
       // 仅在有会话时刷新，避免无效调用
       if (sessionInfo?.conversationId) {
+        console.log('[useSuggestions] Received suggestion-config-updated event, reloading config');
         loadSuggestionConfig();
+        // 重置被动触发计数，避免旧计数在禁用后继续触发
+        setCharacterPendingCount(0);
+        setLastCharacterMessageTs(null);
       }
     };
     window.electronAPI?.on?.('suggestion-config-updated', handler);
