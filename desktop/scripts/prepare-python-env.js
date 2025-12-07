@@ -200,17 +200,11 @@ function installDeps() {
       if (fs.existsSync(pipLog)) {
         fs.rmSync(pipLog, { force: true });
       }
-      const baseEnv = {
-        ...envNoProxy,
-        // 避免任何源码编译，强制使用轮子
-        PIP_ONLY_BINARY: ':all:',
-        PIP_PREFER_BINARY: '1',
-      };
-      const pipCmdDeps = `"${pythonPath}" -m pip install --no-cache-dir --only-binary=:all: --progress-bar off --log "${pipLog}" ${depsEscaped}`;
-      run(pipCmdDeps, { env: baseEnv });
+      const pipCmdDeps = `"${pythonPath}" -m pip install --no-cache-dir --progress-bar off --log "${pipLog}" ${depsEscaped}`;
+      run(pipCmdDeps, { env: envNoProxy });
 
       const pipCmdFw = `"${pythonPath}" -m pip install --no-cache-dir --only-binary=:all: --no-deps --progress-bar off --log "${pipLog}" \"faster-whisper==0.10.0\"`;
-      run(pipCmdFw, { env: baseEnv });
+      run(pipCmdFw, { env: envNoProxy });
     } catch (err) {
       pipErr = err;
     } finally {
