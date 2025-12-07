@@ -187,7 +187,24 @@ function installDeps() {
     ];
     // Windows cmd 会把 >= 解析为重定向，逐一加引号防止误判
     const winPkgsEscaped = winPkgs.map((pkg) => `"${pkg}"`).join(' ');
-    run(`"${pythonPath}" -m pip install --no-cache-dir ${winPkgsEscaped}`, { env: envNoProxy });
+    const pipLog = path.join(projectRoot, 'pip-win.log');
+    try {
+      if (fs.existsSync(pipLog)) {
+        fs.rmSync(pipLog, { force: true });
+      }
+      run(`"${pythonPath}" -m pip install --no-cache-dir --log "${pipLog}" ${winPkgsEscaped}`, { env: envNoProxy });
+    } catch (err) {
+      if (fs.existsSync(pipLog)) {
+        console.error('[prepare-python-env] pip log (tail)');
+        try {
+          const tail = fs.readFileSync(pipLog, 'utf-8').trim().split('\n').slice(-120).join('\n');
+          console.error(tail);
+        } catch (readErr) {
+          console.error('[prepare-python-env] read pip log failed:', readErr.message);
+        }
+      }
+      throw err;
+    }
     return;
   }
 
