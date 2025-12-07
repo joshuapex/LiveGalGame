@@ -185,7 +185,12 @@ function installDeps() {
       'websockets>=12.0',
       'python-multipart>=0.0.9',
     ];
-    run(`"${pythonPath}" -m pip install --no-cache-dir ${winPkgs.join(' ')}`, { env: envNoProxy });
+    // 与 requirements 同步，使用 PyTorch CPU 源，避免拉不到轮子
+    const torchIndex = 'https://download.pytorch.org/whl/cpu';
+    run(
+      `"${pythonPath}" -m pip install --no-cache-dir --extra-index-url ${torchIndex} ${winPkgs.join(' ')}`,
+      { env: envNoProxy }
+    );
     return;
   }
 
