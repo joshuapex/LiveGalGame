@@ -25,9 +25,12 @@ const isWin = process.platform === 'win32';
 const isMac = process.platform === 'darwin';
 const desiredPy = process.env.PYTHON_VERSION || '3.10';
 const candidateCmds = [
-  process.env.PYTHON,
-  isWin ? `python${desiredPy.replace(/^3\./, '')}` : `python${desiredPy}`,
-  isWin ? 'python' : 'python3',
+  process.env.PYTHON,                          // 用户显式指定
+  isWin ? `py -${desiredPy}` : null,           // Windows 推荐 py 启动器
+  isWin ? `python${desiredPy}` : `python${desiredPy}`, // python3.10
+  isWin ? `python${desiredPy.replace('.', '')}` : null, // 兼容 python310
+  isWin ? 'python3' : 'python3',
+  isWin ? 'python' : 'python',
 ].filter(Boolean);
 
 const pythonPath = isWin
@@ -165,10 +168,10 @@ function installDeps() {
   };
 
   console.log(`[prepare-python-env] upgrade pip`);
-  run(`"${pipPath}" install --upgrade pip`, { env: envNoProxy });
+  run(`"${pythonPath}" -m pip install --upgrade pip`, { env: envNoProxy });
 
   console.log(`[prepare-python-env] install requirements`);
-  run(`"${pipPath}" install -r "${requirementsPath}"`, { env: envNoProxy });
+  run(`"${pythonPath}" -m pip install -r "${requirementsPath}"`, { env: envNoProxy });
 }
 
 function ensureCondaPackInstalled(miniforgePython) {
