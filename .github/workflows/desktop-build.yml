@@ -32,13 +32,6 @@ jobs:
             asr: funasr
             artifact_path: |
               desktop/release/*.dmg
-          - os: macos-13
-            platform: mac
-            arch: x64
-            python: python3.10
-            asr: funasr
-            artifact_path: |
-              desktop/release/*.dmg
           - os: windows-latest
             platform: win
             arch: x64
