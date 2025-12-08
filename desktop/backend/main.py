@@ -112,7 +112,8 @@ class WorkerBridge:
 
     def _worker_script_path(self, packaged: bool) -> Path:
         """获取 worker 脚本路径（统一使用 Python 解释器启动，而非独立可执行文件）。"""
-        base_dir = ASSETS_ROOT if packaged else ASR_DIR
+        # 无论是否打包，都使用 ASR_DIR，因为打包时文件在 _internal/asr/ 目录下
+        base_dir = ASR_DIR
         if self.engine == "funasr":
             return base_dir / "asr_funasr_worker.py"
         elif self.engine == "faster-whisper":
@@ -133,7 +134,7 @@ class WorkerBridge:
 
         print(f"[WorkerBridge] worker_path={worker_path} (exists={worker_path.exists()})", file=sys.stderr)
         print(f"[WorkerBridge] python_cmd={python_cmd}", file=sys.stderr)
-
+        
         env = os.environ.copy()
         env.update(
             {
