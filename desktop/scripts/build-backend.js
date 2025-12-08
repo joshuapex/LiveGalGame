@@ -49,39 +49,15 @@ function ensureDirs() {
   [backendDir, distDir, buildDir].forEach((dir) => fs.mkdirSync(dir, { recursive: true }));
 }
 
-/**
- * 打包单个 Python 脚本为可执行文件
- * @param {string} scriptPath - Python 脚本路径
- * @param {string} outputName - 输出名称（不含扩展名）
- * @param {string} outputDir - 输出目录
- */
-function buildExecutable(scriptPath, outputName, outputDir) {
-  console.log(`[build-backend] Building ${outputName} from ${scriptPath}`);
-  
-  const baseArgs = [
-    `"${pythonCmd}"`,
-    '-m PyInstaller',
-    '--clean',
-    '-y',
-    `--name ${outputName}`,
-    `--distpath "${outputDir}"`,
-    `--workpath "${buildDir}"`,
-  ];
-
-  // Windows 用 onefile，其他平台用 onedir
-  const modeArgs = isWin ? ['--onefile', '--noconsole'] : ['--onedir'];
-
-  const cmd = [...baseArgs, ...modeArgs, `"${scriptPath}"`].join(' ');
-  run(cmd);
-}
-
 function main() {
   console.log(`[build-backend] using python: ${pythonCmd}`);
   console.log(`[build-backend] entry: ${entryFile}`);
   ensureDirs();
 
-  // 1. 打包主入口 asr-backend（不再 add-data worker 脚本，因为 worker 会单独打包）
-  console.log('[build-backend] Step 1: Building main asr-backend...');
+  // 单入口打包：仅打包 main.py，强制使用 onedir（避免 onefile 重复解包体积）
+  console.log('[build-backend] Step 1: Building asr-backend (single onedir) ...');
+
+  const dataSep = isWin ? ';' : ':'; // PyInstaller add-data 分隔符
   const mainArgs = [
     `"${pythonCmd}"`,
     '-m PyInstaller',
@@ -90,48 +66,34 @@ function main() {
     '--name asr-backend',
     `--distpath "${distDir}"`,
     `--workpath "${buildDir}"`,
+    // 打包 asr 目录，便于运行时子进程直接调用 python 脚本（不再构建独立 worker 可执行文件）
+    `--add-data "${asrDir}${dataSep}asr"`,
+    // 隐式依赖收集：确保 funasr / faster_whisper / torch 等在主包中一次性收集
+    '--collect-submodules funasr',
+    '--collect-submodules faster_whisper',
+    '--collect-submodules torch',
+    '--collect-submodules ctranslate2',
+    '--collect-submodules tokenizers',
+    '--collect-submodules sentencepiece',
+    '--hidden-import funasr',
+    '--hidden-import faster_whisper',
+    '--hidden-import torch',
   ];
-  const mainModeArgs = isWin ? ['--onefile', '--noconsole'] : ['--onedir'];
+
+  // 统一使用 onedir，避免 onefile 的压缩/解压开销
+  const mainModeArgs = ['--onedir'];
   const mainCmd = [...mainArgs, ...mainModeArgs, `"${entryFile}"`].join(' ');
+  console.log(`[build-backend] PyInstaller cmd: ${mainCmd}`);
   run(mainCmd);
 
-  // 2. 打包 workers 到 asr-backend 目录内
-  const targetDir = path.join(distDir, 'asr-backend');
-  
-  // 确保目标目录存在
-  if (!fs.existsSync(targetDir)) {
-    fs.mkdirSync(targetDir, { recursive: true });
-  }
-
-  // 打包 funasr worker
-  const funasrWorker = path.join(asrDir, 'asr_funasr_worker.py');
-  if (fs.existsSync(funasrWorker)) {
-    console.log('[build-backend] Step 2: Building asr-funasr-worker...');
-    buildExecutable(funasrWorker, 'asr-funasr-worker', targetDir);
-  }
-
-  // 打包 faster-whisper worker
-  const fasterWhisperWorker = path.join(asrDir, 'asr_faster_whisper_worker.py');
-  if (fs.existsSync(fasterWhisperWorker)) {
-    console.log('[build-backend] Step 3: Building asr-faster-whisper-worker...');
-    buildExecutable(fasterWhisperWorker, 'asr-faster-whisper-worker', targetDir);
-  }
-
-  // Windows: 将 main onefile exe 移动到 dist/asr-backend 下
-  if (isWin) {
-    const exeSrc = path.join(distDir, 'asr-backend.exe');
-    const exeDst = path.join(targetDir, 'asr-backend.exe');
-
-    if (fs.existsSync(exeSrc) && exeSrc !== exeDst) {
-      fs.renameSync(exeSrc, exeDst);
-      console.log(`[build-backend] moved main exe -> ${exeDst}`);
-    }
-  }
-
+  // 输出列表
   console.log('[build-backend] Listing final artifacts:');
+  const targetDir = path.join(distDir, 'asr-backend');
   if (fs.existsSync(targetDir)) {
     const files = fs.readdirSync(targetDir);
     files.forEach((f) => console.log(`  - ${f}`));
+  } else {
+    console.warn(`[build-backend] targetDir not found: ${targetDir}`);
   }
 
   console.log('[build-backend] done');

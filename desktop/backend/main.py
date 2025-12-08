@@ -110,44 +110,15 @@ class WorkerBridge:
         self.ws_clients: Dict[str, WebSocket] = {}
         self.pending_requests: Dict[str, asyncio.Future] = {}
 
-    def _worker_executable_path(self) -> Optional[Path]:
-        """获取打包环境下的 worker 可执行文件路径"""
-        if not is_packaged():
-            return None
-        
-        # 在打包环境下，worker 可执行文件与主程序在同一目录
-        exe_dir = Path(sys.executable).parent
-        ext = ".exe" if sys.platform.startswith("win") else ""
-        
+    def _worker_script_path(self, packaged: bool) -> Path:
+        """获取 worker 脚本路径（统一使用 Python 解释器启动，而非独立可执行文件）。"""
+        base_dir = ASSETS_ROOT if packaged else ASR_DIR
         if self.engine == "funasr":
-            # onedir 模式：可执行文件在子目录中
-            worker_dir = exe_dir / f"asr-funasr-worker"
-            worker_exe = worker_dir / f"asr-funasr-worker{ext}"
-            if worker_exe.exists():
-                return worker_exe
-            # 也检查同级目录（可能被扁平化）
-            worker_exe = exe_dir / f"asr-funasr-worker{ext}"
-            if worker_exe.exists():
-                return worker_exe
+            return base_dir / "asr_funasr_worker.py"
         elif self.engine == "faster-whisper":
-            worker_dir = exe_dir / f"asr-faster-whisper-worker"
-            worker_exe = worker_dir / f"asr-faster-whisper-worker{ext}"
-            if worker_exe.exists():
-                return worker_exe
-            worker_exe = exe_dir / f"asr-faster-whisper-worker{ext}"
-            if worker_exe.exists():
-                return worker_exe
-        
-        return None
-
-    def _worker_script_path(self) -> Path:
-        """获取开发环境下的 worker 脚本路径"""
-        if self.engine == "funasr":
-            return ASR_DIR / "asr_funasr_worker.py"
-        elif self.engine == "faster-whisper":
-            return ASR_DIR / "asr_faster_whisper_worker.py"
+            return base_dir / "asr_faster_whisper_worker.py"
         # Fallback to generic worker
-        return ASR_DIR / "asr_worker.py"
+        return base_dir / "asr_worker.py"
 
     async def start(self):
         if self.process:
@@ -156,6 +127,13 @@ class WorkerBridge:
         print(f"[WorkerBridge] engine={self.engine}, model={self.model}", file=sys.stderr)
         print(f"[WorkerBridge] is_packaged={is_packaged()}", file=sys.stderr)
         
+        packaged = is_packaged()
+        worker_path = self._worker_script_path(packaged)
+        python_cmd = sys.executable if packaged else resolve_python_cmd()
+
+        print(f"[WorkerBridge] worker_path={worker_path} (exists={worker_path.exists()})", file=sys.stderr)
+        print(f"[WorkerBridge] python_cmd={python_cmd}", file=sys.stderr)
+
         env = os.environ.copy()
         env.update(
             {
@@ -168,67 +146,30 @@ class WorkerBridge:
             }
         )
 
-        if is_packaged():
-            # 打包环境：调用 worker 可执行文件
-            worker_exe = self._worker_executable_path()
-            print(f"[WorkerBridge] Looking for worker executable...", file=sys.stderr)
-            
-            # 列出可执行文件所在目录以便调试
-            exe_dir = Path(sys.executable).parent
-            print(f"[WorkerBridge] exe_dir={exe_dir}", file=sys.stderr)
-            if exe_dir.exists():
+        if not worker_path.exists():
+            parent = worker_path.parent
+            print(f"[WorkerBridge] ERROR: Worker script not found!", file=sys.stderr)
+            print(f"[WorkerBridge] Parent dir: {parent} (exists={parent.exists()})", file=sys.stderr)
+            if parent.exists():
                 try:
-                    files = list(exe_dir.iterdir())
-                    print(f"[WorkerBridge] exe_dir contents: {[f.name for f in files[:20]]}", file=sys.stderr)
+                    files = list(parent.iterdir())
+                    print(f"[WorkerBridge] Parent contents: {[f.name for f in files]}", file=sys.stderr)
                 except Exception as e:
-                    print(f"[WorkerBridge] Cannot list exe_dir: {e}", file=sys.stderr)
-            
-            if worker_exe and worker_exe.exists():
-                print(f"[WorkerBridge] Found worker executable: {worker_exe}", file=sys.stderr)
-                sys.stderr.flush()
-                self.process = await asyncio.create_subprocess_exec(
-                    str(worker_exe),
-                    stdin=asyncio.subprocess.PIPE,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    env=env,
-                )
-            else:
-                print(f"[WorkerBridge] ERROR: Worker executable not found!", file=sys.stderr)
-                print(f"[WorkerBridge] Expected: asr-{self.engine.replace('faster-', 'faster-')}-worker", file=sys.stderr)
-                sys.stderr.flush()
-                raise FileNotFoundError(f"Worker executable not found for engine: {self.engine}")
-        else:
-            # 开发环境：用 Python 执行 worker 脚本
-            worker_path = self._worker_script_path()
-            print(f"[WorkerBridge] worker_path={worker_path} (exists={worker_path.exists()})", file=sys.stderr)
-            
-            if not worker_path.exists():
-                parent = worker_path.parent
-                print(f"[WorkerBridge] ERROR: Worker script not found!", file=sys.stderr)
-                print(f"[WorkerBridge] Parent dir: {parent} (exists={parent.exists()})", file=sys.stderr)
-                if parent.exists():
-                    try:
-                        files = list(parent.iterdir())
-                        print(f"[WorkerBridge] Parent contents: {[f.name for f in files]}", file=sys.stderr)
-                    except Exception as e:
-                        print(f"[WorkerBridge] Cannot list parent: {e}", file=sys.stderr)
-                sys.stderr.flush()
-                raise FileNotFoundError(f"Worker script not found: {worker_path}")
-
-            python_cmd = resolve_python_cmd()
-            print(f"[WorkerBridge] python_cmd={python_cmd}", file=sys.stderr)
-            print(f"[WorkerBridge] Spawning worker subprocess...", file=sys.stderr)
+                    print(f"[WorkerBridge] Cannot list parent: {e}", file=sys.stderr)
             sys.stderr.flush()
+            raise FileNotFoundError(f"Worker script not found: {worker_path}")
 
-            self.process = await asyncio.create_subprocess_exec(
-                python_cmd,
-                str(worker_path),
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env,
-            )
+        print(f"[WorkerBridge] Spawning worker subprocess...", file=sys.stderr)
+        sys.stderr.flush()
+
+        self.process = await asyncio.create_subprocess_exec(
+            python_cmd,
+            str(worker_path),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
 
         print(f"[WorkerBridge] Worker process spawned, pid={self.process.pid}", file=sys.stderr)
         sys.stderr.flush()
