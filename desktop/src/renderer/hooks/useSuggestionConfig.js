@@ -118,6 +118,8 @@ export const useSuggestionConfig = () => {
         situation_model_name: suggestionForm.situation_model_name || null
       };
       await window.electronAPI.updateSuggestionConfig(payload);
+      // 通知 HUD 侧刷新建议配置，避免需切换会话才生效
+      window.electronAPI?.send?.('suggestion-config-updated');
       setSuggestionMessage('已保存');
       await loadSuggestionSettings();
       setTimeout(() => setSuggestionMessage(''), 3000);

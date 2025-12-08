@@ -2,11 +2,22 @@ import electron from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-const { BrowserWindow, screen, dialog } = electron;
+const { app, BrowserWindow, screen, dialog } = electron;
 
 // 获取 __dirname 的 ESM 等效方式
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+/**
+ * 生产环境下获取打包后的渲染进程入口文件路径
+ * 开发环境下不会使用（dev 走 loadURL）
+ * @param {string} fileName
+ */
+function getRendererFilePath(fileName) {
+  // app.getAppPath() 会指向 app.asar 根目录，dist/renderer 位于其下一级
+  const appRoot = app.getAppPath();
+  return path.join(appRoot, 'dist', 'renderer', fileName);
+}
 
 /**
  * 窗口管理器 - 负责创建和管理应用窗口
@@ -71,7 +82,7 @@ export class WindowManager {
       this.mainWindow.loadURL('http://localhost:5173');
     } else {
       // 生产环境：加载构建后的文件
-      this.mainWindow.loadFile(path.join(__dirname, '../../dist/renderer/index.html'));
+      this.mainWindow.loadFile(getRendererFilePath('index.html'));
     }
 
     // 窗口准备就绪后显示
@@ -110,7 +121,7 @@ export class WindowManager {
       // 检查ASR模型是否就绪，如果未就绪则等待
       console.log('[HUD] 检查ASR模型状态...');
       let checkAttempts = 0;
-      const maxAttempts = 120; // 最多等待12秒（120 * 100ms）
+      const maxAttempts = 1800; // 最多等待180秒（1800 * 100ms），覆盖首次模型下载场景
 
       while (checkAttempts < maxAttempts) {
         const status = await checkASRReady();
@@ -123,7 +134,12 @@ export class WindowManager {
           console.log('[HUD] ASR模型未就绪，等待加载:', status.message);
         } else if (checkAttempts % 10 === 0) {
           // 每1秒输出一次状态
-          console.log(`[HUD] 等待ASR模型加载中... (${checkAttempts * 100}ms)`);
+          const waitedMs = checkAttempts * 100;
+          console.log(`[HUD] 等待ASR模型加载中... (${(waitedMs / 1000).toFixed(1)}s)`);
+        } else if (checkAttempts % 100 === 0) {
+          // 每10秒输出一次详细提示
+          const waitedSec = (checkAttempts * 100) / 1000;
+          console.log(`[HUD] ASR仍在加载，可能正在下载模型，请稍候... 已等待 ${waitedSec.toFixed(0)}s`);
         }
 
         checkAttempts++;
@@ -133,7 +149,7 @@ export class WindowManager {
       if (checkAttempts >= maxAttempts) {
         console.warn('[HUD] ASR模型加载超时，但继续创建HUD窗口');
       } else {
-        console.log(`[HUD] ASR模型就绪，等待时间: ${checkAttempts * 100}ms`);
+        console.log(`[HUD] ASR模型就绪，等待时间: ${(checkAttempts * 100 / 1000).toFixed(1)}s`);
       }
 
       const primaryDisplay = screen.getPrimaryDisplay();
@@ -185,7 +201,7 @@ export class WindowManager {
         this.hudWindow.loadURL('http://localhost:5173/hud.html');
       } else {
         // 生产环境：从构建后的文件加载
-        this.hudWindow.loadFile(path.join(__dirname, '../../dist/renderer/hud.html'));
+        this.hudWindow.loadFile(getRendererFilePath('hud.html'));
       }
 
       // 页面加载完成后再显示

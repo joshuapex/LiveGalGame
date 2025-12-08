@@ -246,6 +246,7 @@ export class IPCManager {
    */
   async reloadASRModel() {
     console.log('[ASR] 重新加载 ASR 模型');
+    this.asrModelPreloading = true;
     if (this.asrManager) {
       try {
         await this.asrManager.stop();
@@ -260,8 +261,18 @@ export class IPCManager {
       this.asrManager = null;
     }
 
-    this.asrModelPreloaded = false;
-    this.asrModelPreloading = false;
+    // 重新创建并初始化，确保新后端立即拉起
+    try {
+      const asrManager = this.getOrCreateASRManager();
+      await asrManager.initialize(null);
+      this.asrModelPreloaded = true;
+    } catch (error) {
+      console.error('[ASR] 重新加载并初始化 ASR 模型失败:', error);
+      this.asrModelPreloaded = false;
+      throw error;
+    } finally {
+      this.asrModelPreloading = false;
+    }
   }
 
   /**

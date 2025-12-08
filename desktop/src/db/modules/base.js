@@ -26,6 +26,7 @@ export default class DatabaseBase {
     // 3) Electron userData 目录下的 livegalgame.db（可写）
     // 4) 回落到仓库内 data 目录（开发模式）
     const customPath = options.dbPath || process.env.LIVEGALGAME_DB_PATH;
+    const isPackaged = app?.isPackaged;
     const repoDefaultPath = path.join(__dirname, '../../data/livegalgame.db');
     const userDataDir = app?.getPath ? app.getPath('userData') : null;
     const userDbPath = userDataDir ? path.join(userDataDir, 'livegalgame.db') : null;
@@ -49,11 +50,28 @@ export default class DatabaseBase {
       }
     }
 
-    // 如目标是用户目录且不存在，且仓库里有一份模板，则拷贝过去
+    // 如目标是用户目录且不存在，优先尝试从打包资源或仓库模板拷贝
     try {
-      if (resolvedPath === userDbPath && !fs.existsSync(resolvedPath) && fs.existsSync(repoDefaultPath)) {
-        fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
-        fs.copyFileSync(repoDefaultPath, resolvedPath);
+      if (resolvedPath === userDbPath && !fs.existsSync(resolvedPath)) {
+        // 打包场景：resources/data/livegalgame.db 或 app.asar/data/livegalgame.db
+        const resourceSeed = process.resourcesPath
+          ? path.join(process.resourcesPath, 'data', 'livegalgame.db')
+          : null;
+        const asarSeed = path.join(app.getAppPath(), 'data', 'livegalgame.db');
+        const seedDb = (resourceSeed && fs.existsSync(resourceSeed))
+          ? resourceSeed
+          : fs.existsSync(asarSeed)
+            ? asarSeed
+            : null;
+
+        const fallbackSeed = fs.existsSync(repoDefaultPath) ? repoDefaultPath : null;
+        const source = seedDb || fallbackSeed;
+
+        if (source) {
+          fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
+          fs.copyFileSync(source, resolvedPath);
+          console.log(`[DB] seeded database to ${resolvedPath} from ${seedDb ? 'package' : 'repo'}`);
+        }
       }
     } catch (copyErr) {
       console.error('[DB] Failed to bootstrap userData database:', copyErr);

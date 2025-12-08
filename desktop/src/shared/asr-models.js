@@ -14,7 +14,7 @@ export const ASR_MODEL_PRESETS = [
     repoId: 'paraformer-zh-streaming',
     // ModelScope 实际仓库 ID
     modelScopeRepoId: 'iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online',
-    sizeBytes: 300 * 1024 * 1024,
+    sizeBytes: 1800 * 1024 * 1024, // 约 1.8GB（含主模型+词典等）
     recommendedSpec: '≥4 核 CPU / ≥4GB 内存',
     speedHint: '实时 2x-3x',
     language: 'zh',

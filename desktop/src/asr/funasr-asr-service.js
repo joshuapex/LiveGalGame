@@ -36,10 +36,22 @@ class FunASRService {
     }
 
     const __dirname = path.dirname(fileURLToPath(import.meta.url));
-    this.workerScriptPath = path.join(__dirname, 'asr_funasr_worker.py');
+    this.workerScriptPath = this.resolveAsarUnpacked(
+      path.join(__dirname, 'asr_funasr_worker.py')
+    );
 
     logger.log(`[FunASR] Python path: ${this.pythonPath}`);
     logger.log(`[FunASR] Worker script: ${this.workerScriptPath}`);
+  }
+
+  /**
+   * asar 场景下，Python 进程无法直接读取 asar 内部文件，需要使用解包路径
+   */
+  resolveAsarUnpacked(targetPath) {
+    if (!targetPath) return targetPath;
+    return targetPath.includes('app.asar')
+      ? targetPath.replace('app.asar', 'app.asar.unpacked')
+      : targetPath;
   }
 
   setServerCrashCallback(callback) {
@@ -51,19 +63,29 @@ class FunASRService {
     if (envPython && fs.existsSync(envPython)) {
       return envPython;
     }
-    const projectRoot = path.resolve(app.getAppPath(), app.isPackaged ? '../..' : '.');
-    const venvPython = path.join(projectRoot, '.venv', 'bin', 'python');
+
+    // 优先使用打包内置的 Python（extraResources/python-env）
+    const resourcesPath = process.resourcesPath;
+    if (resourcesPath) {
+      const bundledPython = process.platform === 'win32'
+        ? path.join(resourcesPath, 'python-env', 'Scripts', 'python.exe')
+        : path.join(resourcesPath, 'python-env', 'bin', 'python3');
+      if (fs.existsSync(bundledPython)) {
+        return bundledPython;
+      }
+    }
+
+    // 开发环境或回退：项目根下的 python-env/.venv
+    const projectRoot = path.resolve(app.getAppPath(), app.isPackaged ? '..' : '.');
+    const venvPython = path.join(projectRoot, 'python-env', process.platform === 'win32' ? 'Scripts' : 'bin', process.platform === 'win32' ? 'python.exe' : 'python3');
     if (fs.existsSync(venvPython)) {
       return venvPython;
     }
-    // Windows 下可能是 python.exe
-    if (process.platform === 'win32') {
-      const venvPythonWin = path.join(projectRoot, '.venv', 'Scripts', 'python.exe');
-      if (fs.existsSync(venvPythonWin)) {
-        return venvPythonWin;
-      }
+    const legacyVenv = path.join(projectRoot, '.venv', process.platform === 'win32' ? 'Scripts' : 'bin', process.platform === 'win32' ? 'python.exe' : 'python3');
+    if (fs.existsSync(legacyVenv)) {
+      return legacyVenv;
     }
-    return 'python3';
+    return process.platform === 'win32' ? 'python' : 'python3';
   }
 
   async initialize(modelName = 'funasr-paraformer', options = {}) {

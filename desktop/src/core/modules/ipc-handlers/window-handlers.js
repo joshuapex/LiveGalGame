@@ -86,5 +86,13 @@ export function registerWindowHandlers({ windowManager, checkASRReady }) {
     windowManager.endMainDrag();
   });
 
+  // 对话建议配置更新后通知 HUD 重新加载配置
+  ipcMain.on('suggestion-config-updated', () => {
+    const hudWin = windowManager.getHUDWindow?.();
+    if (hudWin && !hudWin.isDestroyed()) {
+      hudWin.webContents.send('suggestion-config-updated');
+    }
+  });
+
   console.log('Window IPC handlers registered');
 }

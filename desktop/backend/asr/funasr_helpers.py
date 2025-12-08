@@ -3,11 +3,23 @@ import traceback
 from typing import Dict, Tuple
 
 import numpy as np
+import os
+import torch
 from funasr import AutoModel
 
 
 def load_funasr_models(cache_dir: str, stride_samples: int, sample_rate: int) -> Tuple[AutoModel, AutoModel, AutoModel]:
     """加载 FunASR 模型，返回 (流式ASR, 标点, 时间戳)"""
+    if cache_dir:
+        os.environ.setdefault("MODELSCOPE_CACHE", cache_dir)
+        os.environ.setdefault("MODELSCOPE_CACHE_HOME", cache_dir)
+
+    # 限制线程，降低内存占用峰值
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+    os.environ.setdefault("MKL_NUM_THREADS", "1")
+    torch.set_num_threads(1)
+    torch.set_num_interop_threads(1)
+
     sys.stderr.write(f"[FunASR Worker] Loading models from cache: {cache_dir}\n")
     sys.stderr.write(
         f"[FunASR Worker] Chunk stride: {stride_samples} samples "
@@ -17,7 +29,14 @@ def load_funasr_models(cache_dir: str, stride_samples: int, sample_rate: int) ->
 
     try:
         sys.stderr.write("[FunASR Worker] Loading streaming ASR model: paraformer-zh-streaming (v2.0.4)\n")
-        stream_model = AutoModel(model="paraformer-zh-streaming", model_revision="v2.0.4")
+        try:
+            stream_model = AutoModel(model="paraformer-zh-streaming", model_revision="v2.0.4")
+        except RuntimeError as exc:
+            if "not enough memory" in str(exc).lower():
+                sys.stderr.write(
+                    "[FunASR Worker] Model load failed: 内存不足，建议改用 Faster-Whisper 或更小的 FunASR 模型。\n"
+                )
+            raise
         sys.stderr.write("[FunASR Worker] Streaming model loaded\n")
 
         sys.stderr.write("[FunASR Worker] Loading punctuation model: ct-punc (v2.0.4)\n")

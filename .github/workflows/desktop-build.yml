@@ -28,20 +28,24 @@ jobs:
           - os: macos-14
             platform: mac
             arch: arm64
+            python: python3.10
+            asr: funasr
             artifact_path: |
-              desktop/dist/*.dmg
-              desktop/dist/*.zip
+              desktop/release/*.dmg
           - os: macos-13
             platform: mac
             arch: x64
+            python: python3.10
+            asr: funasr
             artifact_path: |
-              desktop/dist/*.dmg
-              desktop/dist/*.zip
+              desktop/release/*.dmg
           - os: windows-latest
             platform: win
             arch: x64
+            python: python
+            asr: faster-whisper
             artifact_path: |
-              desktop/dist/*.exe
+              desktop/release/*.exe
 
     defaults:
       run:
@@ -67,8 +71,17 @@ jobs:
           cache: pnpm
           cache-dependency-path: desktop/pnpm-lock.yaml
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Prepare Python env for ASR backend
+        working-directory: desktop
+        run: pnpm run prepare:python
 
       - name: Print app version
         id: meta
@@ -76,6 +89,10 @@ jobs:
           node -e "const v=require('./package.json').version; console.log('app_version='+v)" >> "$GITHUB_OUTPUT"
 
       - name: Build desktop package
+        env:
+          PYTHON: ${{ matrix.python }}
+          ASR_IMPL: ${{ matrix.asr }}
+          ASR_PYTHON_PATH: ${{ matrix.platform == 'win' && format('{0}/desktop/python-env/Scripts/python.exe', github.workspace) || format('{0}/desktop/python-env/bin/python3', github.workspace) }}
         run: |
           if [ "${{ matrix.platform }}" = "mac" ]; then
             pnpm run build:mac -- --${{ matrix.arch }}

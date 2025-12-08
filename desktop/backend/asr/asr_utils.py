@@ -3,7 +3,11 @@ import re
 from typing import List, Tuple, Optional
 
 import numpy as np
-from faster_whisper import WhisperModel
+
+try:
+    from faster_whisper import WhisperModel
+except ImportError:
+    WhisperModel = None
 
 
 def decode_audio_chunk(audio_b64: str) -> np.ndarray:
@@ -81,7 +85,7 @@ def split_by_sentence_end(
 
 
 def transcribe_audio_with_segments(
-    model: WhisperModel,
+    model: "WhisperModel",
     audio_source,
     *,
     initial_prompt: Optional[str] = None,
@@ -96,6 +100,9 @@ def transcribe_audio_with_segments(
     调用 whisper 转录，返回 (完整文本, segments 列表, info)。
     beam_size 同时用于 best_of，避免过多配置分散。
     """
+    if WhisperModel is None:
+        raise ImportError("faster_whisper is required for Whisper transcription; please install faster-whisper.")
+
     transcribe_kwargs = {
         "beam_size": beam_size,
         "best_of": beam_size,

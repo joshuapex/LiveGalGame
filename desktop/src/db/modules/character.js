@@ -7,9 +7,8 @@ export default function CharacterManager(BaseClass) {
       VALUES (@id, @name, @nickname, @relationship_label, @avatar_color, @affinity, @created_at, @updated_at, @notes)
     `);
 
-    // Use a consistent ID (text primary key) instead of relying on rowid
+    // 在 TEXT 主键表上 lastInsertRowid 不可用于取回 ID，必须使用实际写入的 id
     const id = characterData.id || this.generateId();
-
     stmt.run({
       id,
       name: characterData.name,

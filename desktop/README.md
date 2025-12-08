@@ -78,9 +78,10 @@ pnpm install
 ### 配置语音识别
 
 ```bash
-# 安装 FunASR（推荐，中文识别效果最好）
+# 安装 FunASR（推荐，中文识别效果最好，macOS 默认）
 npm run setup-funasr
 ```
+- Windows 默认使用 Faster-Whisper base（无需额外配置）；如需更高中文精度可按需安装 FunASR。
 
 ### 启动
 

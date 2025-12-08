@@ -36,6 +36,102 @@ function Hud() {
   // 临时禁用streaming功能
   const streamingDisabled = true;
 
+  // 确保有可用对话ID（缺失时自动创建并回写）
+  const ensureConversationId = async () => {
+    let conversationId = chatSession.sessionInfo?.conversationId;
+    if (conversationId) return conversationId;
+
+    const api = window.electronAPI;
+    const characterId = chatSession.sessionInfo?.characterId;
+    if (!api?.dbCreateConversation || !characterId) return null;
+
+    try {
+      const newConv = await api.dbCreateConversation({
+        character_id: characterId,
+        title: chatSession.sessionInfo?.conversationName || '新对话'
+      });
+      conversationId = newConv?.id;
+      if (conversationId) {
+        await chatSession.handleSessionSelected({
+          ...chatSession.sessionInfo,
+          conversationId,
+          conversationName: newConv?.title || chatSession.sessionInfo?.conversationName,
+          isNew: false
+        });
+      }
+      return conversationId;
+    } catch (err) {
+      console.error('[HUD] 创建对话失败:', err);
+      return null;
+    }
+  };
+
+  // 对齐设置页：自动兜底音源配置
+  const prepareAudioSources = async () => {
+    const api = window.electronAPI;
+    if (!api?.asrGetAudioSources) {
+      throw new Error('ASR 音频源接口不可用');
+    }
+
+    let audioSources = await api.asrGetAudioSources();
+    let speaker1 = audioSources.find(s => s.id === 'speaker1');
+    let speaker2 = audioSources.find(s => s.id === 'speaker2');
+
+    // 若未配置或缺失设备ID，枚举麦克风并写入
+    if (!speaker1 || !speaker1.device_id) {
+      const devices = await audioCaptureService.enumerateDevices();
+      if (!devices || devices.length === 0) {
+        throw new Error('未找到可用麦克风设备，请先在系统中确认设备连接');
+      }
+
+      const firstDevice = devices[0];
+      const payload = {
+        id: 'speaker1',
+        name: '用户（麦克风）',
+        device_id: firstDevice.deviceId,
+        device_name: firstDevice.label || firstDevice.deviceId,
+        is_active: 1
+      };
+
+      if (speaker1) {
+        await api.asrUpdateAudioSource('speaker1', payload);
+      } else if (api.asrCreateAudioSource) {
+        await api.asrCreateAudioSource(payload);
+      }
+      speaker1 = payload;
+    }
+
+    // 确保系统音频源有默认记录
+    if (!speaker2 && api.asrCreateAudioSource) {
+      try {
+        await api.asrCreateAudioSource({
+          id: 'speaker2',
+          name: '角色（系统音频）',
+          device_id: 'system-loopback',
+          device_name: '系统音频（屏幕捕获）',
+          is_active: 0
+        });
+      } catch (err) {
+        console.warn('[HUD] 创建系统音频源失败:', err);
+      }
+    }
+
+    // 使用最新状态
+    audioSources = await api.asrGetAudioSources();
+    speaker1 = audioSources.find(s => s.id === 'speaker1') || speaker1;
+    speaker2 = audioSources.find(s => s.id === 'speaker2') || speaker2;
+
+    const isSpeaker1Active = speaker1 && (speaker1.is_active === 1 || speaker1.is_active === true || speaker1.is_active === '1');
+    if (!isSpeaker1Active) {
+      throw new Error('麦克风配置未激活，请在设置中启用音频源');
+    }
+    if (!speaker1?.device_id) {
+      throw new Error('麦克风设备ID未配置，请在设置中配置音频源');
+    }
+
+    return { speaker1, speaker2 };
+  };
+
   const toggleListening = async () => {
     if (isListening) {
       // 停止监听
@@ -62,33 +158,13 @@ function Hud() {
         return;
       }
 
-      const conversationId = chatSession.sessionInfo?.conversationId;
+      const conversationId = await ensureConversationId();
       if (!conversationId) {
         chatSession.setError('未找到有效的对话ID');
         return;
       }
 
-      // 检查音频源配置
-      const audioSources = await api.asrGetAudioSources();
-      const speaker1 = audioSources.find(s => s.id === 'speaker1');
-      const speaker2 = audioSources.find(s => s.id === 'speaker2');
-
-      // 检查speaker1是否存在且激活
-      if (!speaker1) {
-        chatSession.setError('未找到麦克风配置，请在设置中配置音频源');
-        return;
-      }
-
-      const isSpeaker1Active = speaker1.is_active === 1 || speaker1.is_active === true || speaker1.is_active === '1';
-      if (!isSpeaker1Active) {
-        chatSession.setError('麦克风配置未激活，请在设置中启用音频源');
-        return;
-      }
-
-      if (!speaker1.device_id) {
-        chatSession.setError('麦克风设备ID未配置，请在设置中配置音频源');
-        return;
-      }
+      const { speaker1, speaker2 } = await prepareAudioSources();
 
       // 1. 通知主进程开始 ASR
       await api.asrStart(conversationId);

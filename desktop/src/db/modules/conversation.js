@@ -1,24 +1,26 @@
 export default function ConversationManager(BaseClass) {
   return class extends BaseClass {
     // 创建对话
-    createConversation(conversationData) {
+  createConversation(conversationData) {
+    // 统一使用写入时的主键值，避免 TEXT 主键返回 rowid 导致二次查询为空
+    const id = conversationData.id || this.generateId();
+    const now = Date.now();
+
     const stmt = this.db.prepare(`
       INSERT INTO conversations (id, character_id, title, date, affinity_change, summary, tags, created_at, updated_at)
       VALUES (@id, @character_id, @title, @date, @affinity_change, @summary, @tags, @created_at, @updated_at)
     `);
 
-    const id = conversationData.id || this.generateId();
-
     stmt.run({
       id,
       character_id: conversationData.character_id,
       title: conversationData.title || null,
-      date: conversationData.date || Date.now(),
+      date: conversationData.date || now,
       affinity_change: conversationData.affinity_change || 0,
       summary: conversationData.summary || null,
       tags: conversationData.tags || null,
-      created_at: Date.now(),
-      updated_at: Date.now()
+      created_at: now,
+      updated_at: now
     });
 
     return this.getConversationById(id);
