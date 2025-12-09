@@ -12,7 +12,6 @@ import { useSuggestions } from '../../hooks/useSuggestions.js';
 import { SessionSelector } from './SessionSelector.jsx';
 import { TranscriptView } from '../../components/Chat/TranscriptView.jsx';
 import { SuggestionsPanel } from '../../components/Chat/SuggestionsPanel.jsx';
-import { VolumeIndicators } from '../../components/Chat/VolumeIndicators.jsx';
 
 const getPointerCoords = (event) => {
   const x = event.screenX !== undefined && event.screenX !== null ? event.screenX : event.clientX;
@@ -308,13 +307,6 @@ function Hud() {
           isListening={isListening}
           isNew={chatSession.sessionInfo?.isNew}
           transcriptRef={messages.transcriptRef}
-        />
-
-        <VolumeIndicators
-          micVolumeLevel={micVolumeLevel}
-          systemVolumeLevel={systemVolumeLevel}
-          systemAudioNotAuthorized={systemAudioNotAuthorized}
-          sessionInfo={chatSession.sessionInfo}
         />
       </section>
 

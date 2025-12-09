@@ -1,7 +1,6 @@
 import React from 'react';
 import { TranscriptView } from './TranscriptView.jsx';
 import { SuggestionsPanel } from './SuggestionsPanel.jsx';
-import { VolumeIndicators } from './VolumeIndicators.jsx';
 
 export const FullHud = ({
     isListening,
@@ -94,13 +93,6 @@ export const FullHud = ({
                         isListening={isListening}
                         isNew={chatSession.sessionInfo?.isNew}
                         transcriptRef={messages.transcriptRef}
-                    />
-
-                    <VolumeIndicators
-                        micVolumeLevel={micVolumeLevel}
-                        systemVolumeLevel={systemVolumeLevel}
-                        systemAudioNotAuthorized={systemAudioNotAuthorized}
-                        sessionInfo={chatSession.sessionInfo}
                     />
                 </section>
 

@@ -46,7 +46,7 @@
   align-items: center;
   justify-content: center;
   cursor: help;
-  overflow: hidden;
+  /* overflow: hidden; */
   transition: all 0.3s ease;
 }
 
@@ -56,7 +56,7 @@
 }
 
 .compact-status-badge .status-text-layer {
-  position: absolute;
+  /* position: absolute; */
   display: flex;
   align-items: center;
   gap: 8px;
@@ -66,25 +66,19 @@
   transition: opacity 0.3s ease, transform 0.3s ease;
 }
 
-.compact-status-badge .volume-detail-layer {
-  position: absolute;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 80%;
-  height: 100%;
-  opacity: 0;
-  transform: translateY(10px);
-  transition: opacity 0.3s ease, transform 0.3s ease;
-}
+/* Removed old volume detail layer styles */
 
+/*
 .compact-status-badge:hover .status-text-layer {
   opacity: 0;
   transform: translateY(-10px);
 }
+*/
 
-.compact-status-badge:hover .volume-detail-layer {
+/* Enable popover on hover */
+.compact-status-badge:hover .listening-popover {
   opacity: 1;
+  pointer-events: auto;
   transform: translateY(0);
 }
 
@@ -111,42 +105,6 @@
 .compact-mini-wave .bar:nth-child(1) { height: 60%; animation-delay: -0.4s; }
 .compact-mini-wave .bar:nth-child(2) { height: 100%; animation-delay: -0.2s; }
 .compact-mini-wave .bar:nth-child(3) { height: 50%; animation-delay: -0.5s; }
-
-.vol-group {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-}
-
-.vol-bars {
-  display: flex;
-  align-items: flex-end;
-  gap: 2px;
-  height: 16px;
-}
-
-.v-bar {
-  width: 3px;
-  border-radius: 2px;
-  animation: compactEqualize 0.8s infinite ease-in-out;
-}
-
-.vol-group.me .v-bar { background: #00E676; }
-.vol-group.her .v-bar { background: #EA80FC; }
-
-.vol-label {
-  font-size: 8px;
-  color: #888;
-  text-transform: uppercase;
-  font-weight: bold;
-}
-
-.compact-divider {
-  width: 1px;
-  height: 12px;
-  background: rgba(255, 255, 255, 0.1);
-}
 
 .compact-window-controls {
   display: flex;

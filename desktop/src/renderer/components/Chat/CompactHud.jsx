@@ -8,12 +8,6 @@ const normalizeVolume = (value) => {
   return Math.min(100, Math.max(0, Math.round(value * 100)));
 };
 
-const buildBarHeights = (value) => {
-  const normalized = normalizeVolume(value);
-  const base = [0.6, 0.95, 0.7, 1];
-  return base.map((ratio) => Math.max(8, Math.min(100, Math.round(normalized * ratio))));
-};
-
 export const CompactHud = ({
   isListening,
   micVolumeLevel,
@@ -31,8 +25,8 @@ export const CompactHud = ({
   onToggleViewMode,
   sessionInfo
 }) => {
-  const micHeights = useMemo(() => buildBarHeights(micVolumeLevel), [micVolumeLevel]);
-  const systemHeights = useMemo(() => buildBarHeights(systemVolumeLevel), [systemVolumeLevel]);
+  const micVolumePercent = normalizeVolume(micVolumeLevel);
+  const sysVolumePercent = normalizeVolume(systemVolumeLevel);
 
   const displaySuggestions = useMemo(() => {
     if (!Array.isArray(suggestions) || suggestions.length === 0) return [];
@@ -56,34 +50,30 @@ export const CompactHud = ({
     <div className="compact-widget">
       <div className="compact-widget-inner">
         <div className="compact-header">
-            <div className="compact-status-badge" title="悬停查看双方实时音量">
-              <div className="status-text-layer">
-                <div className={`compact-mini-wave ${isListening ? '' : 'paused'}`}>
+          <div className="compact-status-badge" title="悬停查看双方实时音量">
+            <div className="status-text-layer">
+              <div className={`compact-mini-wave ${isListening ? '' : 'paused'}`}>
                 <div className="bar" />
                 <div className="bar" />
                 <div className="bar" />
               </div>
               {listeningLabel}
             </div>
-            <div className="volume-detail-layer">
-              <div className="vol-group me">
-                <div className="vol-bars">
-                  {micHeights.map((h, idx) => (
-                    <div className="v-bar" style={{ height: `${h}%` }} key={`mic-${idx}`} />
-                  ))}
+            
+            <div className="listening-popover">
+              <div className="listening-row">
+                <span className="listening-tag">ME</span>
+                <div className="listening-bar">
+                  <div className="listening-bar-fill mic" style={{ width: `${micVolumePercent}%` }} />
                 </div>
-                <span className="vol-label">ME</span>
+                <span className="listening-value">{micVolumePercent}%</span>
               </div>
-
-              <div className="compact-divider" />
-
-              <div className="vol-group her">
-                <div className="vol-bars">
-                  {systemHeights.map((h, idx) => (
-                    <div className="v-bar" style={{ height: `${h}%` }} key={`sys-${idx}`} />
-                  ))}
+              <div className="listening-row">
+                <span className="listening-tag">HER</span>
+                <div className="listening-bar">
+                  <div className="listening-bar-fill sys" style={{ width: `${sysVolumePercent}%` }} />
                 </div>
-                <span className="vol-label">HER</span>
+                <span className="listening-value">{sysVolumePercent}%</span>
               </div>
             </div>
           </div>

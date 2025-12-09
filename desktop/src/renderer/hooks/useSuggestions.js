@@ -239,8 +239,20 @@ export const useSuggestions = (sessionInfo) => {
    */
   const maybeRunSituationDetection = useCallback(
     async (reasonHint, message, opts = {}) => {
+      const isTopicChangeDirect = reasonHint === 'topic_change';
+      // 话题转折：按产品预期直接生成，无需再走判定模型
+      if (isTopicChangeDirect) {
+        if (!sessionInfo?.conversationId || !sessionInfo?.characterId) return;
+        if (!suggestionConfig?.enable_passive_suggestion) return;
+        if (!canTriggerPassive()) return;
+        if (suggestionStatus === 'streaming') return;
+        triggerPassiveSuggestion('topic_change');
+        return;
+      }
+
       const detectionEnabled =
         suggestionConfig?.situation_llm_enabled ?? suggestionConfig?.topic_detection_enabled;
+      // 静音/连发：需开启情景判定才会走 LLM 判定
       if (!detectionEnabled) return;
       if (!sessionInfo?.conversationId || !sessionInfo?.characterId) return;
       if (!window.electronAPI?.detectTopicShift) return;
@@ -623,6 +635,7 @@ export const useSuggestions = (sessionInfo) => {
     // 方法
     handleGenerateSuggestions,
     triggerPassiveSuggestion,
+      triggerTopicChangeSuggestion: () => maybeRunSituationDetection('topic_change'),
     handleCopySuggestion,
     handleNewMessage,
     clearSuggestionError,

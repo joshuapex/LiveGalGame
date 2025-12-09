@@ -547,14 +547,27 @@ export default class LLMSuggestionService {
       '2) need_options=false：',
       '   - 仅日常陈述、感叹，无明确期待；对话流畅无需辅助。',
       '',
-      '# Output (Strict TOON)',
-      '只输出一行 TOON 表格，禁止 JSON/代码块/解释。',
-      '表头：situation[1]{need_options,trigger,reason,confidence}:',
-      '字段：',
-      '- need_options: true/false (是否介入)',
+      '# Output (Strict TOON Format)',
+      '必须输出两行，禁止 JSON/代码块/解释/前缀/后缀：',
+      '',
+      '第一行（表头）：situation[1]{need_options,trigger,reason,confidence}:',
+      '第二行（数据）：值1,值2,值3,值4',
+      '',
+      '【格式要求】',
+      '- 表头和数据行必须分开，不能在同一行',
+      '- 表头必须以冒号结尾',
+      '- 数据行用英文逗号分隔，顺序对应表头字段',
+      '- reason字段如果包含逗号，请用引号包裹，如："理由,包含逗号"',
+      '',
+      '【字段说明】',
+      '- need_options: true 或 false（是否介入）',
       '- trigger: question | invite | message_burst | silence | other',
-      '- reason: 简短中文决策理由，如“角色提问等待回答”“冷场超10秒需破冰”',
-      '- confidence: 0.0-1.0',
+      '- reason: 简短中文决策理由，如"角色提问等待回答""冷场超10秒需破冰"',
+      '- confidence: 0.0-1.0 的数值',
+      '',
+      '【示例】',
+      'situation[1]{need_options,trigger,reason,confidence}:',
+      'true,silence,冷场超3秒需破冰,0.8',
       '',
       '# Context Data',
       `【角色信息】${context.characterProfile}`,
@@ -562,7 +575,7 @@ export default class LLMSuggestionService {
       context.historyText,
       ...signalLines,
       '',
-      '请直接输出上述 TOON 表格，不要添加任何其他文本。'
+      '请严格按照上述格式输出，表头和数据行必须分开，不要在同一行。'
     ].join('\n');
   }
 
@@ -664,17 +677,38 @@ export default class LLMSuggestionService {
 
       return await new Promise((resolve, reject) => {
         let buffer = '';
+        let rawStreamContent = '';
+        let firstContentLogged = false;
         let headerParsed = false;
         let fields = [];
         let lastParsed = null;
-        const headerRegex = /^situation\[(\d+)\]\{([^}]+)\}:\s*$/i;
         let resolved = false;
 
         const finish = (parsedObj) => {
           if (resolved) return;
           resolved = true;
           controller.abort();
+          console.log('[SituationParser] finish', parsedObj || lastParsed || {});
           resolve(buildResult(parsedObj || lastParsed || {}));
+        };
+
+        // 增强的表头正则：兼容冒号可选，并尝试捕获可能连在一起的数据
+        const headerRegex = /^situation\[(\d+)\]\{([^}]+)\}:?\s*(.*)$/i;
+
+        // 解析key:value格式的数据行（兼容模型输出在同一行的情况）
+        const parseKeyValueLine = (line) => {
+          const obj = {};
+          // 匹配 key:value 格式，兼容中文字符和逗号
+          const kvPattern = /(\w+):\s*([^,}]+)/g;
+          let match;
+          while ((match = kvPattern.exec(line)) !== null) {
+            const key = match[1].trim();
+            let value = match[2].trim();
+            // 移除末尾可能的逗号或右括号
+            value = value.replace(/[,}]$/, '').trim();
+            obj[key] = value;
+          }
+          return Object.keys(obj).length > 0 ? obj : null;
         };
 
         const processLine = (line) => {
@@ -683,27 +717,59 @@ export default class LLMSuggestionService {
             const match = line.match(headerRegex);
             if (match) {
               headerParsed = true;
-              fields = match[2]
+              const headerFields = match[2];
+              const possibleData = match[3]?.trim();
+              
+              fields = headerFields
                 .split(',')
                 .map((f) => f.trim())
                 .filter(Boolean);
+              console.log('[SituationParser] header parsed', { fields, possibleData });
+
+              // 如果表头后面有数据（同一行），尝试解析key:value格式
+              if (possibleData) {
+                const kvObj = parseKeyValueLine(possibleData);
+                if (kvObj && Object.keys(kvObj).length > 0) {
+                  lastParsed = kvObj;
+                  console.log('[SituationParser] data parsed from header line (key:value)', kvObj);
+                  // 解析到完整数据后立即返回，无论need_options值
+                  finish(kvObj);
+                  return;
+                }
+              }
             }
             return;
           }
 
-          const values = this.csvSplit(line);
-          const parsedObj = {};
-          fields.forEach((field, idx) => {
-            parsedObj[field] = values[idx] !== undefined ? values[idx].trim() : '';
-          });
-          lastParsed = parsedObj;
+          // 数据行处理：先尝试key:value格式，再尝试CSV格式
+          let parsedObj = null;
+          
+          // 尝试key:value格式
+          const kvObj = parseKeyValueLine(line);
+          if (kvObj && Object.keys(kvObj).length > 0) {
+            parsedObj = kvObj;
+            console.log('[SituationParser] data line parsed (key:value)', parsedObj);
+          } else {
+            // 尝试CSV格式
+            const values = this.csvSplit(line);
+            parsedObj = {};
+            fields.forEach((field, idx) => {
+              parsedObj[field] = values[idx] !== undefined ? values[idx].trim() : '';
+            });
+            console.log('[SituationParser] data line parsed (csv)', parsedObj);
+          }
 
-          const needOptions = this.parseBoolean(
-            parsedObj.need_options ?? parsedObj.should_suggest ?? parsedObj.should_intervene
-          );
-          // 只要判定需要就立即返回，其余字段后续不必等待
-          if (needOptions || headerParsed) {
-            finish(parsedObj);
+          if (parsedObj && Object.keys(parsedObj).length > 0) {
+            lastParsed = parsedObj;
+            // 解析到有效数据后立即返回，无论need_options值
+            // 如果need_options为true则更快返回，但false也会在流结束时返回
+            const needOptions = this.parseBoolean(
+              parsedObj.need_options ?? parsedObj.should_suggest ?? parsedObj.should_intervene
+            );
+            if (needOptions) {
+              finish(parsedObj);
+            }
+            // 如果need_options为false，会在流结束时通过finish(lastParsed)返回
           }
         };
 
@@ -721,6 +787,13 @@ export default class LLMSuggestionService {
               if (!content) continue;
 
               buffer += content;
+              rawStreamContent += content;
+
+              if (!firstContentLogged) {
+                firstContentLogged = true;
+                console.log('[SituationParser] first content chunk', content.slice(0, 80).replace(/\n/g, '\\n'));
+              }
+
               let newlineIndex = buffer.indexOf('\n');
               while (newlineIndex >= 0) {
                 const line = buffer.slice(0, newlineIndex).trim();
@@ -730,6 +803,18 @@ export default class LLMSuggestionService {
               }
             }
             // 流结束，若未解析到则用最后记录
+            if (buffer.trim()) {
+              console.log('[SituationParser] flushing tail line', buffer.trim());
+              processLine(buffer.trim());
+            }
+            console.log(
+              '[SituationParser] stream end, raw length=',
+              rawStreamContent.length,
+              'preview=',
+              rawStreamContent.slice(0, 120).replace(/\n/g, '\\n'),
+              'lastParsed=',
+              lastParsed
+            );
             finish(lastParsed || {});
           } catch (error) {
             if (error?.name === 'AbortError' && resolved) return;
@@ -793,7 +878,8 @@ export default class LLMSuggestionService {
 
   resolveSituationModelName(llmConfig, suggestionConfig) {
     const situationModel = suggestionConfig?.situation_model_name && suggestionConfig.situation_model_name.trim();
-    if (situationModel) {
+    // 若用户未显式设置（默认 gpt-4o-mini），优先使用全局默认 LLM 配置的模型，避免与不同提供商的默认占位不匹配
+    if (situationModel && situationModel !== 'gpt-4o-mini') {
       return situationModel;
     }
     return this.resolveModelName(llmConfig, suggestionConfig) || DEFAULT_SITUATION_MODEL;

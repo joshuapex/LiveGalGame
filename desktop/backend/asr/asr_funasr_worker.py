@@ -53,6 +53,31 @@ if MODELSCOPE_CACHE:
     os.environ.setdefault("MODELSCOPE_CACHE", MODELSCOPE_CACHE)
     os.environ.setdefault("MODELSCOPE_CACHE_HOME", MODELSCOPE_CACHE)
 
+# 离线模式：如果设置了 MODELSCOPE_OFFLINE=1，则跳过网络请求，直接使用本地缓存
+OFFLINE_MODE = os.environ.get("MODELSCOPE_OFFLINE", "").lower() in ("1", "true", "yes")
+if OFFLINE_MODE:
+    sys.stderr.write("[FunASR Worker] Offline mode enabled: using local cache only\n")
+    sys.stderr.flush()
+    # 设置 modelscope 离线模式相关环境变量
+    os.environ["MODELSCOPE_OFFLINE"] = "1"
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    # 尝试配置 modelscope 库的离线模式
+    try:
+        from modelscope.hub.snapshot_download import snapshot_download
+        from modelscope.hub.file_download import model_file_download
+        # Monkey-patch: 让 modelscope 跳过版本检查
+        import modelscope.hub.api as ms_api
+        if hasattr(ms_api, 'HubApi'):
+            _original_get_model_files = getattr(ms_api.HubApi, 'get_model_files', None)
+            if _original_get_model_files:
+                def _patched_get_model_files(self, model_id, revision=None, *args, **kwargs):
+                    # 离线模式下直接返回空，让库使用本地缓存
+                    return []
+                ms_api.HubApi.get_model_files = _patched_get_model_files
+    except Exception as e:
+        sys.stderr.write(f"[FunASR Worker] Warning: Could not configure modelscope offline mode: {e}\n")
+        sys.stderr.flush()
+
 # ==============================================================================
 # FunASR 配置
 # ==============================================================================
@@ -180,6 +205,41 @@ class SessionState:
         self.start_time = 0.0
 
 
+def resolve_local_model_path(model_id: str) -> Optional[str]:
+    """
+    在离线模式下，解析本地模型路径。
+    检查 MODELSCOPE_CACHE 和默认缓存目录下是否存在模型。
+    """
+    if not OFFLINE_MODE:
+        return None
+    
+    import os.path
+    cache_dirs = [
+        os.environ.get("MODELSCOPE_CACHE"),
+        os.environ.get("ASR_CACHE_DIR"),
+        os.path.join(os.path.expanduser("~"), ".cache", "modelscope", "hub"),
+    ]
+    
+    for cache_dir in cache_dirs:
+        if not cache_dir:
+            continue
+        # ModelScope 缓存结构: hub/models/<model_id>/
+        candidates = [
+            os.path.join(cache_dir, model_id),
+            os.path.join(cache_dir, "models", model_id),
+        ]
+        for candidate in candidates:
+            if os.path.isdir(candidate):
+                # 检查是否有模型文件
+                files = os.listdir(candidate)
+                if any(f.endswith(('.onnx', '.bin', '.json')) for f in files):
+                    sys.stderr.write(f"[FunASR Worker] Found local model: {candidate}\n")
+                    sys.stderr.flush()
+                    return candidate
+    
+    return None
+
+
 def load_funasr_onnx_models():
     """
     加载 funasr_onnx 模型 (VAD + 流式ASR + 离线ASR + 标点)
@@ -189,6 +249,7 @@ def load_funasr_onnx_models():
         * funasr-paraformer: INT8 量化版，包体约 0.76GB（online/offline/punc/vad），速度更快
         * funasr-paraformer-large: FP32 未量化，约 2.1GB（按 INT8→FP32 体积估算），精度更高
     - ASR_QUANTIZE: 是否使用量化 (true/false)，默认根据模型类型自动选择
+    - MODELSCOPE_OFFLINE: 离线模式，跳过网络请求直接使用本地缓存
     """
     try:
         from funasr_onnx.vad_bin import Fsmn_vad
@@ -218,28 +279,38 @@ def load_funasr_onnx_models():
     sys.stderr.write(f"[FunASR Worker] Model ID: {model_id}\n")
     sys.stderr.write(f"[FunASR Worker] Is Large model: {is_large}\n")
     sys.stderr.write(f"[FunASR Worker] Use Quantize: {use_quantize}\n")
+    sys.stderr.write(f"[FunASR Worker] Offline mode: {OFFLINE_MODE}\n")
     sys.stderr.write(f"[FunASR Worker] Preset size hint: {'~0.76GB INT8 (default)' if use_quantize else '~2.1GB FP32 (higher accuracy)'}\n")
-    sys.stderr.write("[FunASR Worker] Loading ONNX models (first run will download)...\n")
+    if OFFLINE_MODE:
+        sys.stderr.write("[FunASR Worker] Loading ONNX models from local cache (offline mode)...\n")
+    else:
+        sys.stderr.write("[FunASR Worker] Loading ONNX models (first run will download)...\n")
     sys.stderr.flush()
 
     # ONNX 模型配置
     # 可以通过环境变量覆盖默认模型
-    vad_model_dir = os.environ.get(
+    vad_model_id = os.environ.get(
         "FUNASR_VAD_MODEL", 
         "damo/speech_fsmn_vad_zh-cn-16k-common-onnx"
     )
-    online_model_dir = os.environ.get(
+    online_model_id = os.environ.get(
         "FUNASR_ONLINE_MODEL",
         "damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online-onnx"
     )
-    offline_model_dir = os.environ.get(
+    offline_model_id = os.environ.get(
         "FUNASR_OFFLINE_MODEL",
         "damo/speech_paraformer-large-vad-punc_asr_nat-zh-cn-16k-common-vocab8404-onnx"
     )
-    punc_model_dir = os.environ.get(
+    punc_model_id = os.environ.get(
         "FUNASR_PUNC_MODEL",
         "damo/punc_ct-transformer_zh-cn-common-vocab272727-onnx"
     )
+    
+    # 离线模式下，尝试解析本地路径
+    vad_model_dir = resolve_local_model_path(vad_model_id) or vad_model_id
+    online_model_dir = resolve_local_model_path(online_model_id) or online_model_id
+    offline_model_dir = resolve_local_model_path(offline_model_id) or offline_model_id
+    punc_model_dir = resolve_local_model_path(punc_model_id) or punc_model_id
 
     # 1. VAD 模型: 检测语音活动
     sys.stderr.write(f"[FunASR Worker] Loading VAD model: {vad_model_dir}...\n")
