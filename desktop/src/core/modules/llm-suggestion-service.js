@@ -12,9 +12,10 @@ const DEFAULT_SITUATION_TIMEOUT_MS = 1000 * 5;
 export default class LLMSuggestionService {
   constructor(dbGetter) {
     this.dbGetter = dbGetter;
-    this.client = null;
-    this.clientConfigSignature = null;
+    this.clientPool = {};
+    this.clientConfigSignature = null; // 保留字段兼容旧逻辑（不再使用）
     this.currentLLMConfig = null;
+    this.currentLLMFeature = 'default';
   }
 
   get db() {
@@ -25,14 +26,18 @@ export default class LLMSuggestionService {
     return db;
   }
 
-  async ensureClient() {
-    const llmConfig = this.db.getDefaultLLMConfig();
+  async ensureClient(feature = 'default') {
+    const featureKey = typeof feature === 'string' && feature.trim() ? feature.trim().toLowerCase() : 'default';
+    const llmConfig =
+      (this.db.getLLMConfigForFeature && this.db.getLLMConfigForFeature(featureKey)) ||
+      this.db.getDefaultLLMConfig();
     if (!llmConfig) {
       throw new Error('未找到默认LLM配置，请先在设置中配置。');
     }
 
-    const signature = `${llmConfig.id || 'unknown'}-${llmConfig.updated_at || 0}`;
-    if (!this.client || this.clientConfigSignature !== signature) {
+    const signature = `${featureKey}:${llmConfig.id || 'unknown'}-${llmConfig.updated_at || 0}`;
+    const cached = this.clientPool[featureKey];
+    if (!cached || cached.signature !== signature) {
       const { default: OpenAI } = await import('openai');
       const clientConfig = { apiKey: llmConfig.api_key };
       if (llmConfig.base_url) {
@@ -40,12 +45,16 @@ export default class LLMSuggestionService {
         const baseURL = llmConfig.base_url.replace(/\/chat\/completions\/?$/, '');
         clientConfig.baseURL = baseURL;
       }
-      this.client = new OpenAI(clientConfig);
-      this.clientConfigSignature = signature;
+      this.clientPool[featureKey] = {
+        client: new OpenAI(clientConfig),
+        signature,
+        config: llmConfig
+      };
     }
 
     this.currentLLMConfig = llmConfig;
-    return this.client;
+    this.currentLLMFeature = featureKey;
+    return this.clientPool[featureKey].client;
   }
 
   sanitizeCount(value, fallback) {
@@ -106,7 +115,7 @@ export default class LLMSuggestionService {
     const count = this.sanitizeCount(optionCount ?? suggestionConfig?.suggestion_count, 3);
     const contextLimit = messageLimit || suggestionConfig?.context_message_limit || 10;
     const thinkingEnabled = suggestionConfig?.thinking_enabled === 1 || suggestionConfig?.thinking_enabled === true;
-    const client = await this.ensureClient();
+    const client = await this.ensureClient('suggestion');
     const modelName = this.resolveModelName(this.currentLLMConfig, suggestionConfig);
 
     const context = buildSuggestionContext(this.db, {
@@ -163,7 +172,7 @@ export default class LLMSuggestionService {
     const batchTimestamp = Date.now();
 
     // 获取最新的消息ID（用于关联suggestion）
-    const latestMessageId = context.history && context.history.length > 0 
+    const latestMessageId = context.history && context.history.length > 0
       ? context.history[context.history.length - 1]?.id || null
       : null;
 
@@ -186,7 +195,7 @@ export default class LLMSuggestionService {
         suggestion.index = suggestionIndex;
         console.log(`[LLMSuggestionService] Decorated suggestion:`, suggestion);
         emittedCount += 1;
-        
+
         // 保存suggestion到数据库
         if (conversationId && this.db.saveActionSuggestion) {
           try {
@@ -197,8 +206,21 @@ export default class LLMSuggestionService {
             // 不阻断流程，继续执行
           }
         }
-        
+
         handlers.onSuggestion?.(suggestion);
+      },
+      onSkip: (data) => {
+        console.log('[LLMSuggestionService] Parser detected SKIP, no suggestions needed');
+        // 调用完成回调，但标记为 skipped
+        handlers.onComplete?.({
+          trigger,
+          reason,
+          skipped: true,
+          skipReason: data?.reason || 'no_suggestion_needed',
+          model: modelName,
+          tokenUsage: usageInfo,
+          contextMessages: context.history?.length || 0
+        });
       },
       onError: (error) => {
         console.error('[LLMSuggestionService] Parser error:', error);
@@ -234,7 +256,7 @@ export default class LLMSuggestionService {
 
       console.log('[LLMSuggestionService] Starting to process chunks...');
       let hasReceivedContent = false; // 标记是否已收到真正的content
-      
+
       for await (const chunk of stream) {
         chunkCount++;
         const choice = chunk?.choices?.[0];
@@ -258,16 +280,16 @@ export default class LLMSuggestionService {
             hasReceivedContent = true;
             console.log(`[LLMSuggestionService] First content chunk received at chunk #${chunkCount}`);
           }
-          
+
           totalContentLength += delta.length;
           rawStreamContent += String(delta);
-          
+
           // 简化日志输出，避免过多细节
           if (chunkCount % 50 === 0 || delta.length > 10) {
             const preview = delta.length > 30 ? delta.slice(0, 30).replace(/\n/g, '\\n') + '...' : delta.replace(/\n/g, '\\n');
             console.log(`[LLMSuggestionService] Chunk #${chunkCount}: content (${delta.length} chars) "${preview}"`);
           }
-          
+
           // 立即推送到parser，实现真正的流式展示
           parser.push(delta);
         }
@@ -349,8 +371,9 @@ export default class LLMSuggestionService {
       manual: '用户主动求助：提供多元策略（保守/进取/幽默/共情），帮助选择其一。',
       silence: '静默提醒：给破冰/延续话题的轻量提示，降低冷场尴尬。',
       message_count: '角色多条未回：提炼关键点，给一条综合回应思路，包含确认/回应/再提问。',
-      topic_change: '话题转折或被提问：先回应问题/态度，再给推进话题的具体方向。'
-    }[trigger] || '按通用策略生成多样化可选方案。';
+      topic_change: '话题转折或被提问：先回应问题/态度，再给推进话题的具体方向。',
+      refresh: '用户点击"换一批"：生成与上次完全不同方向的新建议。'
+    }[trigger === 'manual' && reason === 'refresh' ? 'refresh' : trigger] || '按通用策略生成多样化可选方案。';
 
     const affinityStageText = context.affinityStage?.label
       ? `${context.affinityStage.label}：${context.affinityStage.strategy}`
@@ -365,53 +388,120 @@ export default class LLMSuggestionService {
       : [];
     const previousSuggestionText = previousList.length
       ? [
-          '【用户反馈】上一批建议未被采纳，用户要求换一批，请给出明显不同的新思路，避免重复或轻微改写。',
-          '【上一批建议（仅供去同质化参考）】',
-          ...previousList.slice(0, 5).map((item, index) => {
-            const tagsText = Array.isArray(item.tags) && item.tags.length ? ` [${item.tags.join('、')}]` : '';
-            return `${index + 1}. ${item.title || '未命名'}：${item.content || ''}${tagsText}`;
-          })
-        ].join('\n')
+        '【用户反馈】上一批建议未被采纳，用户要求换一批，请给出明显不同的新思路，避免重复或轻微改写。',
+        '【上一批建议（仅供去同质化参考）】',
+        ...previousList.slice(0, 5).map((item, index) => {
+          const tagsText = Array.isArray(item.tags) && item.tags.length ? ` [${item.tags.join('、')}]` : '';
+          return `${index + 1}. ${item.title || '未命名'}：${item.content || ''}${tagsText}`;
+        })
+      ].join('\n')
       : null;
 
     return [
+      '# 角色定位',
+      '你是"恋爱互动教练"，职责包括两部分：',
+      '1. **判断时机**：分析对话状态，决定是否需要给用户提供回复建议',
+      '2. **生成建议**：如果需要，生成具体的回复策略和话术',
+      '',
+      '# 输出规则',
+      '- 如果对话不需要建议（角色自言自语/话没说完/自然闲聊流畅），直接输出：SKIP',
+      '- 如果需要建议，输出 TOON 格式的建议列表',
+      '- 禁止输出任何解释性文字如"好的"/"以下是"/"让我分析"',
+      '',
+      '---',
+      '',
       `【触发方式】${triggerLabel}`,
       `【触发策略指导】${triggerGuidance}`,
-      `【角色信息】${context.characterProfile}`,
+      `【角色档案】${context.characterProfile}`,
       `【好感阶段策略】${affinityStageText}`,
       '【对话历史】',
       context.historyText,
       `【情感分析】${emotionText}`,
       ...(previousSuggestionText ? [previousSuggestionText] : []),
-      `【输出要求】`,
-      `- 仅输出 TOON 格式，禁止任何解释、前缀、后缀或代码块，特别禁止输出「好的/以下是/结果如下」等冗余文本`,
-      `- 第一行必须直接是表头：suggestions[${count}]{suggestion,tags}:（前后不能有其他字符或空行）`,
-      `- 在表头下方，每行依次填写一个选项，字段之间必须使用英文逗号(,)分隔`,
-      `- 生成 ${count} 个选项，每个包含：suggestion（1-2 句话的详细可执行思路/话术，结合角色喜好/忌讳与情感状态）、tags（2-3 个策略标签，使用顿号/逗号分隔）`,
-      `- 选项必须覆盖不同策略维度：至少包含保守稳妥、积极进取、轻松幽默/共情中的若干，不要同质化`,
-      `- 严格结合触发方式：静默→破冰与轻量延续；消息累积→综合回应要点；话题转折→先回应问题/态度再推进；主动→多元供选`,
-      `- 严格结合角色档案：投其所好、避开忌讳，符合性格（内向勿过猛）与好感阶段边界`,
-      `- 如果提供了上一批建议，务必生成不同方向的新选项，避免与列表雷同或轻微改写`,
-      `- 不要直接代替玩家发言；不要输出泛化空话（如“多聊聊”“继续沟通”）；不要复述历史；不编造不存在的事实`,
-      `- 如果信息不足，也要给可行的引导，而不是返回空`,
-      `【示例（仅参考，不要输出示例本身）】`,
-      '```toon',
-      '示例1 初识破冰/静默：',
+      '',
+      '---',
+      '',
+      '# Few-Shot 示例',
+      '',
+      '## 示例1：不需要建议 - 话未说完',
+      '```',
+      '【对话历史】',
+      '[10秒前] 角色：哈哈哈今天遇到一件超搞笑的事',
+      '[5秒前] 角色：我跟你说...',
+      '[2秒前] 角色：（还在打字中）',
+      '【情感分析】兴奋/期待分享',
+      '```',
+      '**输出：**',
+      'SKIP',
+      '',
+      '## 示例2：需要建议 - 角色提问/邀约',
+      '```',
+      '【对话历史】',
+      '[30秒前] 角色：最近工作还好吗？',
+      '[20秒前] 玩家：还行吧',
+      '[5秒前] 角色：那...周末有空吗？',
+      '【情感分析】期待/试探',
+      '【触发方式】静默/被动（上一条消息后沉默 8 秒）',
+      '```',
+      '**输出：**',
       'suggestions[3]{suggestion,tags}:',
-      '用一句轻松的自我揭示开场，请她点评,"破冰,轻松"',
-      '提到她喜欢的音乐/电影并请她推荐最新的一首,"投其所好,互动"',
-      '针对她刚提到的细节表达共情再抛一个相关问题,"细节共情,延续"',
-      '示例2 角色提问/话题转折：',
+      '积极回应"有空！"然后问她"有什么安排吗？"，表现出期待感,积极回应、推进',
+      '如果真的不确定，可以说"要看情况，怎么了？"再问清楚她的意图,稳妥确认、礼貌',
+      '用幽默的方式回"周末在等你约"配合一个调皮表情（适合暧昧期）,幽默暧昧、撩',
+      '',
+      '## 示例3：需要建议 - 尴尬冷场',
+      '```',
+      '【对话历史】',
+      '[3分钟前] 角色：今天上班好累啊...',
+      '[3分钟前] 玩家：辛苦啦～',
+      '[2分钟前] 角色：嗯...',
+      '[沉默 2 分钟]',
+      '【情感分析】疲惫/需要安慰',
+      '【触发方式】静默检测（沉默超过 2 分钟）',
+      '```',
+      '**输出：**',
       'suggestions[3]{suggestion,tags}:',
-      '先正面回应她的问题，再补充你的看法并收个问句,"回应,态度明确"',
-      '复述她关心点表达理解，再抛一个轻问题引她说更多,"共情,确认"',
-      '给一个可执行的小提议并询问她意愿,"推进,邀请"',
-      '示例3 暧昧升温（中好感）：',
+      '问她"要不要视频聊聊？"或"需要我陪你吗？"，展现关心,关心体贴、推进',
+      '分享你今天的趣事转移话题，如"我今天也遇到个搞笑的事..."，打破沉默,破冰、分享',
+      '直接问她"是不是有什么烦心事？"，鼓励她倾诉,共情倾听、深入',
+      '',
+      '## 示例4：需要建议 - 换一批（去重）',
+      '```',
+      '【对话历史】',
+      '[1分钟前] 角色：你觉得我怎么样？',
+      '【上一批建议】',
+      '1. 诚实夸奖她的优点，如"我觉得你很善良"',
+      '2. 用开玩笑的方式回避，如"你钓鱼执法呢？"',
+      '3. 反问她"你想听真话还是假话？"',
+      '【触发方式】用户点击"换一批"',
+      '```',
+      '**输出：**',
       'suggestions[3]{suggestion,tags}:',
-      '针对她的优点给真诚夸奖并留白等待回应,"夸赞,暧昧"',
-      '提议一起做她喜欢的事并询问合适时间,"计划,邀请"',
-      '用轻松幽默回应保持轻快氛围，别过猛,"幽默,轻松"',
-      '```'
+      '主动示好说"我喜欢和你聊天"，然后问她为什么突然这么问,表达好感、推进',
+      '分享具体观察如"我发现你特别细心，上次还记得我说过的..."，用细节打动她,细节共情、真诚',
+      '稍微撩一下说"你想听我夸你吗？那要做好心理准备哦"，营造暧昧氛围,暧昧撩拨、幽默',
+      '',
+      '---',
+      '',
+      '# 正式任务',
+      '请根据上述【角色档案】和【对话历史】，判断是否需要建议：',
+      '- **如无需建议**，仅输出：SKIP',
+      `- **如需要建议**，输出 ${count} 条 TOON 格式建议，覆盖不同策略维度`,
+      '',
+      '【格式要求】',
+      '- TOON 格式表头：suggestions[${count}]{suggestion,tags}:',
+      '- 每行一个建议，格式：建议内容,标签列表',
+      '- suggestion（建议内容）：1-2句话的详细可执行思路/话术，结合角色喜好/忌讳与情感状态',
+      '- tags（策略标签）：2-3个策略标签，用逗号分隔（如"积极回应,推进"）',
+      '',
+      '【策略要求】',
+      '- 选项必须覆盖不同策略维度：保守稳妥、积极进取、轻松幽默、共情等，不要同质化',
+      '- 严格结合触发方式：静默→破冰延续；消息累积→综合回应；话题转折→先回应再推进；主动→多元供选',
+      '- 严格结合角色档案：投其所好、避开忌讳，符合性格与好感阶段边界',
+      '- 如果提供了上一批建议，务必生成不同方向的新选项，避免与列表雷同或轻微改写',
+      '- 不要直接代替玩家发言；不要输出泛化空话（如"多聊聊""继续沟通"）；不要复述历史；不编造不存在的事实',
+      '',
+      '请开始输出：'
     ].join('\n');
   }
 
@@ -634,7 +724,7 @@ export default class LLMSuggestionService {
 
     const heuristicResult = this.analyzeHeuristics();
 
-    const client = await this.ensureClient();
+    const client = await this.ensureClient('situation');
     const modelName = this.resolveSituationModelName(this.currentLLMConfig, suggestionConfig);
     const prompt = this.buildSituationPrompt(context, heuristicResult, {
       silenceSeconds,
@@ -661,16 +751,16 @@ export default class LLMSuggestionService {
       ]
     };
 
-      console.log('Situation LLM Request Debug Info:', {
-        payload,
-        llmConfig: {
-          id: this.currentLLMConfig.id,
-          name: this.currentLLMConfig.name,
-          base_url: this.currentLLMConfig.base_url,
-          model_name: this.currentLLMConfig.model_name
-        },
-        requestParams
-      });
+    console.log('Situation LLM Request Debug Info:', {
+      payload,
+      llmConfig: {
+        id: this.currentLLMConfig.id,
+        name: this.currentLLMConfig.name,
+        base_url: this.currentLLMConfig.base_url,
+        model_name: this.currentLLMConfig.model_name
+      },
+      requestParams
+    });
 
     const controller = new AbortController();
 
@@ -743,7 +833,7 @@ export default class LLMSuggestionService {
               headerParsed = true;
               const headerFields = match[2];
               const possibleData = match[3]?.trim();
-              
+
               fields = headerFields
                 .split(',')
                 .map((f) => f.trim())
@@ -767,7 +857,7 @@ export default class LLMSuggestionService {
 
           // 数据行处理：先尝试key:value格式，再尝试CSV格式
           let parsedObj = null;
-          
+
           // 尝试key:value格式
           const kvObj = parseKeyValueLine(line);
           if (kvObj && Object.keys(kvObj).length > 0) {

@@ -24,6 +24,16 @@ class AudioCaptureService {
     this.silenceSkipCount = new Map(); // sourceId -> 连续跳过静音的次数
     this.maxSilenceSkipLog = 5; // 最多打印几次静音跳过日志
 
+    // 【断句】基于静音时长的分句（用于生成多条消息）
+    // 注意：这是“停顿时长阈值”（秒/毫秒），不同于上面的能量阈值 silenceThreshold
+    this.sentencePauseThresholdMs = 600; // 默认更灵敏（0.6s），会自动从 ASR 默认配置刷新
+    this._vadConfigLastRefreshAt = 0;
+    this.enableSilenceSentenceCommit = false; // 仅云端 ASR 启用，FunASR 不受影响
+    this.silenceDurationMs = new Map(); // sourceId -> 连续静音累计时长(ms)，仅在 inSpeech=true 时累积
+    this.inSpeech = new Map(); // sourceId -> 是否处于“说话段”中（只要发送过非静音音频即认为进入）
+    this.lastSilenceCommitAt = new Map(); // sourceId -> 上次触发断句的时间戳(ms)
+    this.silenceCommitCooldownMs = 500; // 防抖，避免同一段静音重复触发
+
     // 音频数据累积
     this.audioAccumulators = new Map(); // sourceId -> Float32Array
     this.lastSendTime = new Map(); // sourceId -> timestamp
@@ -91,6 +101,8 @@ class AudioCaptureService {
         await this.initialize();
       }
 
+      await this.refreshVadConfigFromASRDefault();
+
       // 如果已经在捕获，先停止
       if (this.streams.has(sourceId)) {
         await this.stopCapture(sourceId);
@@ -134,6 +146,8 @@ class AudioCaptureService {
       if (!this.audioContext) {
         await this.initialize();
       }
+
+      await this.refreshVadConfigFromASRDefault();
 
       // 如果已经在捕获，先停止
       if (this.streams.has(sourceId)) {
@@ -314,6 +328,8 @@ class AudioCaptureService {
     // 初始化音频累积器
     this.audioAccumulators.set(sourceId, new Float32Array());
     this.lastSendTime.set(sourceId, Date.now());
+    this.silenceDurationMs.set(sourceId, 0);
+    this.inSpeech.set(sourceId, false);
 
     // 设置音频处理回调
     scriptProcessor.onaudioprocess = (event) => {
@@ -394,6 +410,30 @@ class AudioCaptureService {
 
       // 【VAD】静音检测 - 跳过静音数据，避免 ASR 模型产生幻觉
       if (this.isSilence(accumulator)) {
+        // 【断句】若之前处于说话状态，则累计静音时长；超过阈值触发“分句提交”
+        const wasInSpeech = this.enableSilenceSentenceCommit && !!this.inSpeech.get(sourceId);
+        if (wasInSpeech) {
+          const chunkDurationMs = (accumulator.length / this.sampleRate) * 1000;
+          const prev = this.silenceDurationMs.get(sourceId) || 0;
+          const next = prev + chunkDurationMs;
+          this.silenceDurationMs.set(sourceId, next);
+
+          const pauseMs = this.sentencePauseThresholdMs || 600;
+          const lastCommitAt = this.lastSilenceCommitAt.get(sourceId) || 0;
+          const canCommit = timestamp - lastCommitAt >= this.silenceCommitCooldownMs;
+          if (next >= pauseMs && canCommit) {
+            this.lastSilenceCommitAt.set(sourceId, timestamp);
+            // 触发主进程的“静音断句提交”（commitCurrentSegment + force_commit）
+            if (window.electronAPI && typeof window.electronAPI.send === 'function') {
+              window.electronAPI.send('asr-silence-commit', { sourceId, timestamp, pauseMs });
+              console.log(`[AudioCaptureService] 🧩 Silence commit triggered for ${sourceId} (silence=${Math.round(next)}ms >= ${pauseMs}ms)`);
+            }
+            // 断句后认为当前说话段结束，等待下一次非静音重新进入说话段
+            this.inSpeech.set(sourceId, false);
+            this.silenceDurationMs.set(sourceId, 0);
+          }
+        }
+
         // 清空累积器，避免累积
         this.audioAccumulators.set(sourceId, new Float32Array());
         this.lastSendTime.set(sourceId, timestamp);
@@ -411,6 +451,14 @@ class AudioCaptureService {
       if (this.silenceSkipCount.get(sourceId) > 0) {
         console.log(`[AudioCaptureService] 🎤 Voice detected for ${sourceId} after ${this.silenceSkipCount.get(sourceId)} silence frames`);
         this.silenceSkipCount.set(sourceId, 0);
+      }
+
+      // 【断句】进入说话段/重置静音累计
+      if (this.enableSilenceSentenceCommit) {
+        if (!this.inSpeech.get(sourceId)) {
+          this.inSpeech.set(sourceId, true);
+        }
+        this.silenceDurationMs.set(sourceId, 0);
       }
 
       // 音频归一化处理
@@ -524,6 +572,9 @@ class AudioCaptureService {
 
       this.audioAccumulators.delete(sourceId);
       this.lastSendTime.delete(sourceId);
+      this.silenceDurationMs.delete(sourceId);
+      this.inSpeech.delete(sourceId);
+      this.lastSilenceCommitAt.delete(sourceId);
 
       console.log(`[AudioCaptureService] ✅ Capture stopped for ${sourceId}`);
 
@@ -605,6 +656,44 @@ class AudioCaptureService {
   destroy() {
     this.stopAllCaptures();
     console.log('[AudioCaptureService] Destroyed');
+  }
+
+  /**
+   * 从 ASR 默认配置刷新“停顿阈值”（用于静音断句）
+   * - 仅用于渲染进程侧断句（不影响后端模型 VAD）
+   */
+  async refreshVadConfigFromASRDefault(force = false) {
+    try {
+      const api = window.electronAPI;
+      if (!api?.asrGetConfigs) {
+        return;
+      }
+
+      const now = Date.now();
+      if (!force && this._vadConfigLastRefreshAt && now - this._vadConfigLastRefreshAt < 5000) {
+        return;
+      }
+      this._vadConfigLastRefreshAt = now;
+
+      const configs = await api.asrGetConfigs();
+      const defaultConfig = configs?.find((c) => c?.is_default === 1) || configs?.[0];
+      const modelName = String(defaultConfig?.model_name || '');
+      // 仅云端 ASR 启用“静音断句生成多条消息”，避免影响 FunASR
+      this.enableSilenceSentenceCommit = modelName.includes('cloud');
+
+      const pauseSecRaw = Number(defaultConfig?.sentence_pause_threshold);
+      if (!Number.isFinite(pauseSecRaw) || pauseSecRaw <= 0) {
+        return;
+      }
+      // 允许更低的阈值，但给一个安全下限，避免 0 导致频繁断句
+      const pauseMs = Math.max(250, Math.round(pauseSecRaw * 1000));
+      if (pauseMs !== this.sentencePauseThresholdMs) {
+        this.sentencePauseThresholdMs = pauseMs;
+        console.log(`[AudioCaptureService] Updated sentencePauseThresholdMs=${pauseMs}ms (enableSilenceSentenceCommit=${this.enableSilenceSentenceCommit}) from ASR config (model=${modelName}, sentence_pause_threshold=${pauseSecRaw}s)`);
+      }
+    } catch (err) {
+      console.warn('[AudioCaptureService] Failed to refresh VAD config from ASR settings:', err);
+    }
   }
 }
 

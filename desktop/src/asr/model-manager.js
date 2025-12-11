@@ -332,6 +332,22 @@ export default class ASRModelManager extends EventEmitter {
       return null;
     }
 
+    // 云端模型：无需下载，本地恒定可用（但依赖网络与 API）
+    if (preset.engine === 'siliconflow' || preset.isRemote) {
+      return {
+        modelId,
+        repoId: preset.repoId || null,
+        modelScopeRepoId: preset.modelScopeRepoId || null,
+        sizeBytes: 0,
+        downloadedBytes: 0,
+        isDownloaded: true,
+        snapshotPath: null,
+        updatedAt: Date.now(),
+        activeDownload: false,
+        source: 'remote'
+      };
+    }
+
     // FunASR ONNX 模型特殊处理
     // 这些模型由 funasr_onnx 库自己管理下载，缓存在 ~/.cache/modelscope/hub/damo/ 目录
     if (preset.engine === 'funasr' && preset.onnxModels) {
@@ -448,6 +464,17 @@ export default class ASRModelManager extends EventEmitter {
     const preset = getAsrModelPreset(modelId);
     if (!preset) {
       throw new Error(`Unknown ASR model: ${modelId}`);
+    }
+
+    // 云端模型不需要下载
+    if (preset.engine === 'siliconflow' || preset.isRemote) {
+      const status = this.getModelStatus(modelId);
+      this.broadcast('asr-model-download-complete', {
+        modelId,
+        repoId: preset.repoId,
+        status
+      });
+      return { status: 'completed' };
     }
 
     // FunASR ONNX 模型由 funasr-onnx 库自己管理下载

@@ -61,10 +61,10 @@ export function ASRModelCard({
       </div>
 
       <div className="mt-4 text-sm">
-        {isDownloaded ? (
+        {isDownloaded || preset.sizeBytes === 0 ? (
           <div className="flex items-center text-green-600">
             <span className="material-symbols-outlined mr-1 text-sm">check_circle</span>
-            <span>本地可用{updatedAt ? ` · 更新于 ${updatedAt}` : ''}</span>
+            <span>{preset.sizeBytes === 0 ? '无需下载 (云端)' : `本地可用${updatedAt ? ` · 更新于 ${updatedAt}` : ''}`}</span>
           </div>
         ) : status.lastError ? (
           <div className="flex items-start text-red-600">
@@ -105,7 +105,7 @@ export function ASRModelCard({
       )}
 
       <div className="mt-4 flex flex-wrap gap-2">
-        {isDownloaded ? (
+        {isDownloaded || preset.sizeBytes === 0 ? (
           <button
             onClick={() => onSetActive(preset.id)}
             disabled={isActive || savingModelId === preset.id}

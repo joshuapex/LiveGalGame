@@ -58,13 +58,15 @@ const csvSplit = (line) => {
 };
 
 export class ToonSuggestionStreamParser {
-  constructor({ onHeader, onSuggestion, onPartialSuggestion, onError } = {}) {
+  constructor({ onHeader, onSuggestion, onPartialSuggestion, onError, onSkip } = {}) {
     this.onHeader = onHeader;
     this.onSuggestion = onSuggestion;
     this.onPartialSuggestion = onPartialSuggestion;
     this.onError = onError;
+    this.onSkip = onSkip;  // 新增: SKIP 回调
     this.buffer = '';
     this.headerParsed = false;
+    this.skipDetected = false;  // 新增: SKIP 状态标记
     this.expectedCount = null;
     this.fields = DEFAULT_FIELDS;
     this.headerSkipCount = 0;
@@ -123,6 +125,23 @@ export class ToonSuggestionStreamParser {
       console.log('[ToonSuggestionStreamParser] Skipping empty line');
       return;
     }
+
+    // 检测 SKIP 信号（不需要建议）
+    const trimmed = line.trim();
+    if (trimmed === 'SKIP' || trimmed.toUpperCase() === 'SKIP') {
+      console.log('[ToonSuggestionStreamParser] Detected SKIP signal');
+      this.skipDetected = true;
+      if (typeof this.onSkip === 'function') {
+        this.onSkip({ reason: 'no_suggestion_needed' });
+      }
+      return;
+    }
+
+    // 如果已经检测到SKIP，忽略后续所有内容
+    if (this.skipDetected) {
+      return;
+    }
+
     const lower = line.toLowerCase();
     const normalizedToon = lower.replace(/[`]/g, '').replace(/\s/g, '');
     if (

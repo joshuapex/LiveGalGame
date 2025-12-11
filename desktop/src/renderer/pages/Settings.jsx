@@ -24,6 +24,7 @@ function Settings() {
   // 初始化
   useEffect(() => {
     llmHook.loadConfigs();
+    llmHook.loadFeatureBindings();
     suggestionHook.loadSuggestionSettings();
     audioDevicesHook.initializeAudioDevices();
   }, []);
@@ -115,6 +116,47 @@ function Settings() {
                 )}
               </>
             )}
+
+            {/* 功能绑定到指定 LLM 配置 */}
+            <div className="p-4 rounded-lg border border-border-light dark:border-border-dark">
+              <div className="mb-3">
+                <p className="font-medium text-text-light dark:text-text-dark">按功能选择 LLM 配置</p>
+                <p className="text-sm text-text-muted-light dark:text-text-muted-dark">
+                  不同功能可绑定不同的 LLM（未选择时沿用默认配置）。
+                </p>
+              </div>
+
+              {llmHook.featureBindingError ? (
+                <div className="mb-3 p-3 rounded bg-red-50 dark:bg-red-900/20 text-sm text-red-600 dark:text-red-300 border border-red-200 dark:border-red-500/40">
+                  {llmHook.featureBindingError}
+                </div>
+              ) : null}
+
+              <div className="space-y-3">
+                {[
+                  { key: 'suggestion', label: '对话建议' },
+                  { key: 'review', label: '复盘报告' }
+                ].map((item) => (
+                  <div key={item.key} className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
+                    <div className="w-28 text-sm text-text-light dark:text-text-dark">{item.label}</div>
+                    <select
+                      disabled={llmHook.featureBindingLoading || llmHook.loading}
+                      value={llmHook.featureBindings?.[item.key] || ''}
+                      onChange={(e) => llmHook.handleSetFeatureConfig(item.key, e.target.value || null)}
+                      className="flex-1 px-3 py-2 border border-border-light dark:border-border-dark rounded-lg bg-surface-light dark:bg-surface-dark text-text-light dark:text-text-dark focus:outline-none focus:ring-2 focus:ring-primary/50"
+                    >
+                      <option value="">使用默认配置</option>
+                      {llmHook.llmConfigs.map((cfg) => (
+                        <option key={cfg.id} value={cfg.id}>
+                          {cfg.name || '未命名'}（{cfg.model_name || '未配置模型'}）
+                          {llmHook.defaultConfig?.id === cfg.id ? ' - 默认' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
 
@@ -199,16 +241,6 @@ function Settings() {
           </p>
         </div>
 
-        {/* 其他设置 */}
-        <div className="bg-surface-light dark:bg-surface-dark rounded-xl p-6 border border-border-light dark:border-border-dark">
-          <h2 className="text-xl font-semibold text-text-light dark:text-text-dark mb-4 flex items-center gap-2">
-            <span className="material-symbols-outlined text-primary">tune</span>
-            其他设置
-          </h2>
-          <p className="text-text-muted-light dark:text-text-muted-dark">
-            更多设置选项即将推出
-          </p>
-        </div>
       </div>
     </div>
   );

@@ -1,228 +1,26 @@
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 import { app } from 'electron';
 import { spawn } from 'child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import killPort from 'kill-port';
 import portfinder from 'portfinder';
-import WebSocket from 'ws';
 import treeKill from 'tree-kill';
+import WebSocket from 'ws';
 import * as logger from '../utils/logger.js';
+import {
+  safeDirSize,
+  getRepoPathsForModel,
+  resolveModelCache,
+  resolveFunasrModelScopeCache,
+  cleanModelScopeLocks
+} from './model-cache.js';
+import { float32ToInt16Buffer, ensureDir, createWavBuffer, defaultAudioStoragePath } from './audio-utils.js';
+import FastAPISession from './fastapi-session.js';
 import { getAsrModelPreset } from '../shared/asr-models.js';
 
-const PCM_SAMPLE_RATE = 16000;
 const DEFAULT_HOST = '127.0.0.1';
 const SERVER_READY_TEXT = 'Application startup complete';
-
-function safeDirSize(targetPath) {
-  try {
-    const stat = fs.statSync(targetPath, { throwIfNoEntry: false });
-    if (!stat) return 0;
-    if (stat.isFile()) return stat.size;
-    if (!stat.isDirectory()) return 0;
-    let total = 0;
-    const stack = [targetPath];
-    while (stack.length) {
-      const dir = stack.pop();
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        const full = path.join(dir, entry.name);
-        if (entry.isFile()) {
-          try {
-            total += fs.statSync(full).size;
-          } catch {
-            // ignore stat errors
-          }
-        } else if (entry.isDirectory()) {
-          stack.push(full);
-        }
-      }
-    }
-    return total;
-  } catch {
-    return 0;
-  }
-}
-
-function getRepoPathsForModel(preset, cacheDir) {
-  const paths = [];
-  if (!preset || !cacheDir) return paths;
-
-  if (preset.repoId) {
-    const repoSafe = `models--${preset.repoId.replace(/\//g, '--')}`;
-    paths.push(path.join(cacheDir, repoSafe));
-  }
-  if (preset.modelScopeRepoId) {
-    paths.push(path.join(cacheDir, 'models', preset.modelScopeRepoId));
-    paths.push(path.join(cacheDir, preset.modelScopeRepoId));
-    // 额外加入默认的 ModelScope 全局缓存目录，避免进度一直为 0
-    paths.push(path.join(os.homedir(), '.cache', 'modelscope', 'hub', 'models', preset.modelScopeRepoId));
-    paths.push(path.join(os.homedir(), '.cache', 'modelscope', 'hub', preset.modelScopeRepoId));
-  }
-
-  // FunASR onnx 模型也需要参与缓存探测（funasr_onnx 默认放在 modelscope 下）
-  if (preset.onnxModels) {
-    const modelDirs = Array.from(new Set(Object.values(preset.onnxModels).filter(Boolean)));
-    modelDirs.forEach((modelDir) => {
-      paths.push(path.join(cacheDir, modelDir));
-      paths.push(path.join(cacheDir, 'models', modelDir));
-    });
-  }
-  return paths;
-}
-
-function cleanModelScopeLocks(cacheDir, maxAgeMs = 10 * 60 * 1000) {
-  if (!cacheDir) return;
-  const lockDir = path.join(cacheDir, '.lock');
-  try {
-    const entries = fs.readdirSync(lockDir, { withFileTypes: true });
-    const now = Date.now();
-    entries.forEach((entry) => {
-      if (!entry.isFile()) return;
-      const full = path.join(lockDir, entry.name);
-      try {
-        const stat = fs.statSync(full);
-        if (stat.mtimeMs < now - maxAgeMs) {
-          fs.unlinkSync(full);
-          logger.log(`[ASR] Removed stale ModelScope lock: ${entry.name}`);
-        }
-      } catch {
-        // ignore
-      }
-    });
-  } catch {
-    // ignore if lock dir missing
-  }
-}
-
-function float32ToInt16Buffer(floatArray) {
-  const int16Array = new Int16Array(floatArray.length);
-  for (let i = 0; i < floatArray.length; i += 1) {
-    const sample = Math.max(-1, Math.min(1, floatArray[i]));
-    int16Array[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
-  }
-  return Buffer.from(int16Array.buffer);
-}
-
-function ensureDir(dirPath) {
-  if (!dirPath) return;
-  fs.mkdirSync(dirPath, { recursive: true });
-}
-
-function getModelCacheCandidates() {
-  const homeDir = os.homedir();
-  const userDataDir = app.getPath('userData');
-  return [
-    process.env.MODELSCOPE_CACHE,
-    process.env.ASR_CACHE_DIR,
-    process.env.HF_HOME ? path.join(process.env.HF_HOME, 'hub') : null,
-    path.join(userDataDir, 'hf-home', 'hub'),
-    path.join(userDataDir, 'ms-cache'),
-    homeDir ? path.join(homeDir, '.cache', 'huggingface', 'hub') : null,
-    homeDir ? path.join(homeDir, '.cache', 'modelscope', 'hub') : null,
-  ].filter(Boolean);
-}
-
-function resolveModelCache(modelName) {
-  const preset = getAsrModelPreset(modelName);
-  const repoId = preset?.repoId || (typeof modelName === 'string' && modelName.includes('/') ? modelName : null);
-  const repoSafe = repoId ? `models--${repoId.replace(/\//g, '--')}` : null;
-  const msRepoId = preset?.modelScopeRepoId;
-  const candidates = getModelCacheCandidates();
-
-  // 优先使用已存在的缓存目录
-  for (const candidate of candidates) {
-    try {
-      if (repoSafe && fs.existsSync(path.join(candidate, repoSafe))) {
-        return { cacheDir: candidate, found: true };
-      }
-      if (msRepoId && fs.existsSync(path.join(candidate, 'models', msRepoId))) {
-        return { cacheDir: candidate, found: true };
-      }
-    } catch {
-      // ignore and continue
-    }
-  }
-
-  // 如果 ModelScope 默认目录存在目标模型，也直接使用
-  if (msRepoId) {
-    const msDefault = path.join(os.homedir(), '.cache', 'modelscope', 'hub');
-    if (fs.existsSync(path.join(msDefault, 'models', msRepoId))) {
-      return { cacheDir: msDefault, found: true };
-    }
-  }
-
-  return { cacheDir: candidates[0] || path.join(app.getPath('userData'), 'hf-home', 'hub'), found: false };
-}
-
-// 针对 funasr_onnx：优先复用已存在的 ModelScope 缓存目录，避免重复下载
-function resolveFunasrModelScopeCache(preset) {
-  if (!preset?.onnxModels) {
-    return null;
-  }
-  const modelDirs = Array.from(new Set(Object.values(preset.onnxModels).filter(Boolean)));
-  
-  // 1. 优先检查系统默认 ModelScope 缓存目录 (~/.cache/modelscope/hub)
-  // 这是 funasr_onnx 库默认下载的位置，如果模型已存在则直接使用，避免重复下载
-  const systemMsCache = path.join(os.homedir(), '.cache', 'modelscope', 'hub');
-  try {
-    let systemHit = false;
-    let systemBytes = 0;
-    for (const dir of modelDirs) {
-      const p1 = path.join(systemMsCache, dir);
-      const p2 = path.join(systemMsCache, 'models', dir);
-      if (fs.existsSync(p1)) {
-        systemHit = true;
-        systemBytes += safeDirSize(p1);
-      } else if (fs.existsSync(p2)) {
-        systemHit = true;
-        systemBytes += safeDirSize(p2);
-      }
-    }
-    // 如果系统目录有模型（至少找到一个），优先使用系统目录
-    if (systemHit && systemBytes > 0) {
-      return { cacheDir: systemMsCache, found: true };
-    }
-  } catch {
-    // ignore and continue
-  }
-  
-  // 2. 检查其他候选目录，选择模型最完整的
-  const candidates = getModelCacheCandidates();
-  let best = null;
-  let bestBytes = -1;
-  for (const candidate of candidates) {
-    // 跳过系统目录（已在上面检查过）
-    if (candidate === systemMsCache) continue;
-    
-    try {
-      let hit = false;
-      let bytes = 0;
-      for (const dir of modelDirs) {
-        const p1 = path.join(candidate, dir);
-        const p2 = path.join(candidate, 'models', dir);
-        if (fs.existsSync(p1)) {
-          hit = true;
-          bytes += safeDirSize(p1);
-        } else if (fs.existsSync(p2)) {
-          hit = true;
-          bytes += safeDirSize(p2);
-        }
-      }
-      if (hit && bytes > bestBytes) {
-        best = { cacheDir: candidate, found: true };
-        bestBytes = bytes;
-      }
-    } catch {
-      // ignore and continue
-    }
-  }
-  if (best) return best;
-  
-  // 3. 如果都没有，使用系统默认目录（funasr_onnx 会下载到这里）
-  return { cacheDir: systemMsCache, found: false };
-}
 
 function detectPythonPath() {
   const envPython = process.env.ASR_PYTHON_PATH;
@@ -237,82 +35,9 @@ function detectPythonPath() {
   return process.platform === 'win32' ? 'python' : 'python3';
 }
 
-class FastAPISession {
-  constructor(ws, sourceId, onSentence, onPartial) {
-    this.ws = ws;
-    this.sourceId = sourceId;
-    this.onSentence = onSentence;
-    this.onPartial = onPartial;
-    this.bind();
-  }
-
-  setCallbacks(onSentence, onPartial) {
-    this.onSentence = onSentence;
-    this.onPartial = onPartial;
-  }
-
-  bind() {
-    this.ws.on('message', (data) => {
-      try {
-        const payload = JSON.parse(data.toString());
-        if (!payload) return;
-        if (payload.type === 'sentence_complete' && this.onSentence) {
-          this.onSentence({
-            sessionId: payload.session_id || this.sourceId,
-            text: payload.text,
-            timestamp: payload.timestamp,
-            trigger: payload.trigger || 'asr',
-            audioDuration: payload.audio_duration,
-            language: payload.language,
-            isSegmentEnd: payload.isSegmentEnd || payload.is_segment_end,
-            // 多句分发模式支持
-            sentenceIndex: payload.sentence_index,
-            totalSentences: payload.total_sentences,
-            rawText: payload.raw_text,
-            startTime: payload.start_time,
-            endTime: payload.end_time,
-          });
-        } else if (payload.type === 'partial' && this.onPartial) {
-          this.onPartial({
-            sessionId: payload.session_id || this.sourceId,
-            partialText: payload.text,
-            fullText: payload.full_text,
-            timestamp: payload.timestamp,
-            isSpeaking: true,
-          });
-        }
-      } catch (error) {
-        logger.warn('[ASR][WS] Failed to parse message:', error);
-      }
-    });
-  }
-
-  sendAudio(buffer) {
-    if (this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(buffer);
-    }
-  }
-
-  sendControl(payload) {
-    if (this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(payload));
-    }
-  }
-
-  reset() {
-    this.sendControl({ type: 'reset_session' });
-  }
-
-  close() {
-    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
-      this.ws.close();
-    }
-  }
-}
-
 class ASRService {
   constructor() {
-    this.modelName = 'funasr-paraformer';
+    this.modelName = 'siliconflow-cloud';
     this.engine = 'funasr';
     this.pythonPath = detectPythonPath();
     this.isInitialized = false;
@@ -334,7 +59,7 @@ class ASRService {
     this.onServerCrash = null;
     this.progressEmitter = null;
     this.retainAudioFiles = false;
-    this.audioStoragePath = path.join(app.getPath('temp'), 'asr');
+    this.audioStoragePath = defaultAudioStoragePath();
     ensureDir(this.audioStoragePath);
     this.isStopping = false; // 标记是否为预期的关闭，避免误报崩溃
   }
@@ -357,7 +82,7 @@ class ASRService {
     });
   }
 
-  async initialize(modelName = 'funasr-paraformer', options = {}) {
+  async initialize(modelName = 'siliconflow-cloud', options = {}) {
     this.modelName = modelName || this.modelName;
     const preset = getAsrModelPreset(modelName);
     this.modelPreset = preset;
@@ -424,6 +149,8 @@ class ASRService {
 
     // 计算已有缓存，若已下载完成则不再上报进度
     const presetSize = this.modelPreset?.sizeBytes || null;
+    const isRemote = this.modelPreset?.isRemote || false;
+    
     const repoPathsSet = new Set(getRepoPathsForModel(this.modelPreset, cacheDir));
     // funasr 需要把 ModelScope onnx 目录也纳入探测
     if (this.engine === 'funasr' && this.modelPreset?.onnxModels && msCacheEnv) {
@@ -431,9 +158,16 @@ class ASRService {
     }
     const repoPaths = Array.from(repoPathsSet);
     const initialDownloaded = repoPaths.length ? repoPaths.reduce((sum, p) => sum + safeDirSize(p), 0) : 0;
-    const cachedEnough = presetSize
-      ? initialDownloaded >= presetSize * 0.9
-      : initialDownloaded > 50 * 1024 * 1024; // 没有 size 时粗判>50MB
+    
+    let cachedEnough = false;
+    if (isRemote) {
+      cachedEnough = true;
+    } else {
+      cachedEnough = presetSize
+        ? initialDownloaded >= presetSize * 0.9
+        : initialDownloaded > 50 * 1024 * 1024; // 没有 size 时粗判>50MB
+    }
+
     this.modelCachePreDownloaded = cachedEnough;
     this.shouldReportProgress = !cachedEnough;
 
@@ -442,7 +176,8 @@ class ASRService {
     const useQuantize = this.modelPreset?.quantize !== false && !isLargeModel;
 
     // 如果检测到已有完整缓存，启用离线模式避免每次启动都联网检查版本
-    const useOfflineMode = this.modelCacheFound && cachedEnough;
+    // 对于远程模型，不需要离线模式
+    const useOfflineMode = !isRemote && this.modelCacheFound && cachedEnough;
     
     const env = {
       ...process.env,
@@ -459,6 +194,8 @@ class ASRService {
       MODELSCOPE_OFFLINE: useOfflineMode ? '1' : '',
       HF_HUB_OFFLINE: useOfflineMode ? '1' : '',
       PYTHONUNBUFFERED: '1',
+      // API Key for Cloud Mode
+      SILICONFLOW_API_KEY: process.env.SILICONFLOW_API_KEY || 'sk-ibgtosfhnbfqninyembtocpvxbvhmjornzblefmylejgvklk'
     };
     
     if (useOfflineMode) {
@@ -779,40 +516,9 @@ class ASRService {
 
     const filepath = path.join(conversationDir, filename);
     const float32Array = audioData instanceof Float32Array ? audioData : new Float32Array(audioData);
-    const wavBuffer = this.createWavBuffer(float32Array);
+    const wavBuffer = createWavBuffer(float32Array);
     fs.writeFileSync(filepath, wavBuffer);
     return filepath;
-  }
-
-  createWavBuffer(audioData) {
-    const numChannels = 1;
-    const bitsPerSample = 16;
-    const bytesPerSample = bitsPerSample / 8;
-    const blockAlign = numChannels * bytesPerSample;
-    const dataLength = audioData.length * bytesPerSample;
-    const buffer = Buffer.alloc(44 + dataLength);
-
-    buffer.write('RIFF', 0);
-    buffer.writeUInt32LE(36 + dataLength, 4);
-    buffer.write('WAVE', 8);
-    buffer.write('fmt ', 12);
-    buffer.writeUInt32LE(16, 16);
-    buffer.writeUInt16LE(1, 20);
-    buffer.writeUInt16LE(numChannels, 22);
-    buffer.writeUInt32LE(PCM_SAMPLE_RATE, 24);
-    buffer.writeUInt32LE(PCM_SAMPLE_RATE * blockAlign, 28);
-    buffer.writeUInt16LE(blockAlign, 32);
-    buffer.writeUInt16LE(bitsPerSample, 34);
-    buffer.write('data', 36);
-    buffer.writeUInt32LE(dataLength, 40);
-
-    for (let i = 0; i < audioData.length; i += 1) {
-      const sample = Math.max(-1, Math.min(1, audioData[i]));
-      const int16 = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
-      buffer.writeInt16LE(int16, 44 + i * 2);
-    }
-
-    return buffer;
   }
 
   clearContext() {

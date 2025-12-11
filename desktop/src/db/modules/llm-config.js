@@ -1,5 +1,11 @@
 export default function LLMConfigManager(BaseClass) {
   return class extends BaseClass {
+    normalizeFeatureKey(feature) {
+      if (typeof feature !== 'string') return null;
+      const trimmed = feature.trim().toLowerCase();
+      return trimmed || null;
+    }
+
     // 创建或更新LLM配置
     saveLLMConfig(configData) {
       this.ensureLLMSchema();
@@ -81,6 +87,9 @@ export default function LLMConfigManager(BaseClass) {
 
     deleteLLMConfig(id) {
       this.ensureLLMSchema();
+      this.ensureLLMFeatureSchema();
+      // 先解绑功能映射，避免留下悬空引用
+      this.db.prepare('UPDATE llm_feature_configs SET llm_config_id = NULL WHERE llm_config_id = ?').run(id);
       const stmt = this.db.prepare('DELETE FROM llm_configs WHERE id = ?');
       return stmt.run(id);
     }
@@ -94,6 +103,101 @@ export default function LLMConfigManager(BaseClass) {
       setDefaultStmt.run(Date.now(), id);
 
       return this.getLLMConfigById(id);
+    }
+
+    setLLMFeatureConfig(feature, llmConfigId) {
+      this.ensureLLMFeatureSchema();
+      const featureKey = this.normalizeFeatureKey(feature);
+      if (!featureKey) {
+        throw new Error('feature 不能为空');
+      }
+
+      const now = Date.now();
+      let validatedId = null;
+      if (llmConfigId) {
+        const exists = this.getLLMConfigById(llmConfigId);
+        if (!exists) {
+          throw new Error('指定的 LLM 配置不存在');
+        }
+        validatedId = llmConfigId;
+      }
+
+      const existing = this.db
+        .prepare('SELECT feature FROM llm_feature_configs WHERE feature = ?')
+        .get(featureKey);
+
+      if (existing) {
+        this.db
+          .prepare(
+            'UPDATE llm_feature_configs SET llm_config_id = @llm_config_id, updated_at = @updated_at WHERE feature = @feature'
+          )
+          .run({
+            feature: featureKey,
+            llm_config_id: validatedId,
+            updated_at: now
+          });
+      } else {
+        this.db
+          .prepare(
+            'INSERT INTO llm_feature_configs (feature, llm_config_id, created_at, updated_at) VALUES (@feature, @llm_config_id, @created_at, @updated_at)'
+          )
+          .run({
+            feature: featureKey,
+            llm_config_id: validatedId,
+            created_at: now,
+            updated_at: now
+          });
+      }
+
+      return this.getLLMFeatureConfig(featureKey);
+    }
+
+    getLLMFeatureConfig(feature) {
+      this.ensureLLMFeatureSchema();
+      const featureKey = this.normalizeFeatureKey(feature);
+      if (!featureKey) return null;
+      return (
+        this.db
+          .prepare('SELECT feature, llm_config_id FROM llm_feature_configs WHERE feature = ?')
+          .get(featureKey) || null
+      );
+    }
+
+    getAllLLMFeatureConfigs() {
+      this.ensureLLMFeatureSchema();
+      const rows = this.db
+        .prepare('SELECT feature, llm_config_id FROM llm_feature_configs')
+        .all();
+      const map = {};
+      for (const row of rows) {
+        map[row.feature] = row.llm_config_id || null;
+      }
+      return map;
+    }
+
+    /**
+     * 获取某功能应使用的 LLM 配置
+     * 若未绑定，则回落到默认配置
+     */
+    getLLMConfigForFeature(feature) {
+      this.ensureLLMFeatureSchema();
+      const featureKey = this.normalizeFeatureKey(feature);
+      let config = null;
+      if (featureKey) {
+        const binding = this.db
+          .prepare('SELECT llm_config_id FROM llm_feature_configs WHERE feature = ?')
+          .get(featureKey);
+        if (binding?.llm_config_id) {
+          config = this.getLLMConfigById(binding.llm_config_id);
+          // 若配置已被删除，则清理绑定，继续回落默认
+          if (!config) {
+            this.db
+              .prepare('UPDATE llm_feature_configs SET llm_config_id = NULL WHERE feature = ?')
+              .run(featureKey);
+          }
+        }
+      }
+      return config || this.getDefaultLLMConfig();
     }
 
     async testLLMConnection(configData) {
@@ -199,12 +303,14 @@ export default function LLMConfigManager(BaseClass) {
 
     ensureLLMSchema() {
       if (this._llmSchemaEnsured) {
+        this.ensureLLMFeatureSchema();
         return;
       }
 
       const columns = this.db.prepare('PRAGMA table_info(llm_configs)').all();
       if (!columns.length) {
         // Table not created yet; schema initialization will handle it.
+        this.ensureLLMFeatureSchema();
         this._llmSchemaEnsured = true;
         return;
       }
@@ -223,7 +329,25 @@ export default function LLMConfigManager(BaseClass) {
           .run();
       }
 
+      this.ensureLLMFeatureSchema();
       this._llmSchemaEnsured = true;
+    }
+
+    ensureLLMFeatureSchema() {
+      if (this._llmFeatureSchemaEnsured) return;
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS llm_feature_configs (
+          feature TEXT PRIMARY KEY,
+          llm_config_id TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY (llm_config_id) REFERENCES llm_configs(id) ON DELETE SET NULL
+        )
+      `);
+      this.db
+        .prepare('CREATE INDEX IF NOT EXISTS idx_llm_feature_config_id ON llm_feature_configs(llm_config_id)')
+        .run();
+      this._llmFeatureSchemaEnsured = true;
     }
 
     rebuildLLMConfigTable(existingColumns) {

@@ -1,5 +1,18 @@
 export const ASR_MODEL_PRESETS = [
-  // FunASR ONNX 模型（默认）- 使用 funasr_onnx 库
+  // SiliconFlow 云端模型（默认）
+  {
+    id: 'siliconflow-cloud',
+    label: 'SiliconFlow Cloud (推荐)',
+    description: '远程 API 模式，无需本地下载模型，轻量级，但需要联网。',
+    engine: 'siliconflow',
+    sizeBytes: 0,
+    recommendedSpec: '任意配置',
+    speedHint: '网络延迟',
+    language: 'zh',
+    isDefault: true,
+    isRemote: true,
+  },
+  // FunASR ONNX 模型
   // 2-Pass 架构: VAD + 流式ASR + 离线ASR + 标点
   {
     id: 'funasr-paraformer',
@@ -21,7 +34,6 @@ export const ASR_MODEL_PRESETS = [
     recommendedSpec: '≥4 核 CPU / ≥4GB 内存',
     speedHint: '实时 2x-3x',
     language: 'zh',
-    isDefault: true,
   },
   {
     id: 'funasr-paraformer-large',

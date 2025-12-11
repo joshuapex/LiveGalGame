@@ -44,3 +44,11 @@ __pycache__/
 *.py[cod]
 *.pyo
 .cursor
+
+# Test media files
+test.mp4
+*.mp4
+*.wav
+
+# Desktop docs (local only)
+desktop/docs/

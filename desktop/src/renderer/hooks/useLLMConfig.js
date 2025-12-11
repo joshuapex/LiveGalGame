@@ -9,6 +9,9 @@ export const useLLMConfig = () => {
   const [defaultConfig, setDefaultConfig] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showAddConfig, setShowAddConfig] = useState(false);
+  const [featureBindings, setFeatureBindings] = useState({});
+  const [featureBindingLoading, setFeatureBindingLoading] = useState(false);
+  const [featureBindingError, setFeatureBindingError] = useState('');
   const [newConfig, setNewConfig] = useState({
     name: '',
     apiKey: '',
@@ -38,6 +41,26 @@ export const useLLMConfig = () => {
       console.error('Failed to load configs:', error);
     } finally {
       setLoading(false);
+    }
+  }, []);
+
+  /**
+   * 加载功能绑定配置
+   */
+  const loadFeatureBindings = useCallback(async () => {
+    if (!window.electronAPI?.getLLMFeatureConfigs) {
+      return;
+    }
+    try {
+      setFeatureBindingLoading(true);
+      setFeatureBindingError('');
+      const bindings = await window.electronAPI.getLLMFeatureConfigs();
+      setFeatureBindings(bindings || {});
+    } catch (error) {
+      console.error('Failed to load LLM feature configs:', error);
+      setFeatureBindingError(error?.message || '加载功能绑定失败');
+    } finally {
+      setFeatureBindingLoading(false);
     }
   }, []);
 
@@ -179,12 +202,38 @@ export const useLLMConfig = () => {
     setTestingConfig(false);
   }, []);
 
+  /**
+   * 绑定/更新功能对应的 LLM 配置
+   */
+  const handleSetFeatureConfig = useCallback(
+    async (feature, llmConfigId) => {
+      if (!window.electronAPI?.setLLMFeatureConfig) {
+        return;
+      }
+      try {
+        setFeatureBindingLoading(true);
+        setFeatureBindingError('');
+        await window.electronAPI.setLLMFeatureConfig(feature, llmConfigId || null);
+        await loadFeatureBindings();
+      } catch (error) {
+        console.error('设置功能绑定失败:', error);
+        setFeatureBindingError(error?.message || '设置失败，请稍后重试');
+      } finally {
+        setFeatureBindingLoading(false);
+      }
+    },
+    [loadFeatureBindings]
+  );
+
   return {
     // 状态
     llmConfigs,
     defaultConfig,
     loading,
     showAddConfig,
+    featureBindings,
+    featureBindingLoading,
+    featureBindingError,
     newConfig,
     testingConfig,
     testConfigMessage,
@@ -196,10 +245,12 @@ export const useLLMConfig = () => {
 
     // 方法
     loadConfigs,
+    loadFeatureBindings,
     handleAddConfig,
     handleTestLLMConfig,
     handleSetDefault,
     handleDeleteConfig,
-    handleCancelAdd
+    handleCancelAdd,
+    handleSetFeatureConfig
   };
 };

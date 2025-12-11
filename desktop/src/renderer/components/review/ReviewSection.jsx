@@ -3,7 +3,7 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useConversationReview } from '../../hooks/useConversationReview.js';
 
-export default function ReviewSection({ conversationId }) {
+export default function ReviewSection({ conversationId, onReviewGenerated }) {
     const { review, isLoading, generate } = useConversationReview(conversationId);
     const navigate = useNavigate();
 
@@ -29,7 +29,10 @@ export default function ReviewSection({ conversationId }) {
                     点击生成复盘，回顾关键决策点，探索"如果当时..."的可能性。
                 </p>
                 <button
-                    onClick={generate}
+                    onClick={async () => {
+                        await generate();
+                        if (onReviewGenerated) onReviewGenerated();
+                    }}
                     className="w-full py-2 bg-primary text-white text-sm font-medium rounded-lg hover:bg-primary/90 transition-colors"
                 >
                     生成复盘
@@ -40,6 +43,13 @@ export default function ReviewSection({ conversationId }) {
 
     const { summary, has_nodes } = review;
     const hasNodes = !!has_nodes;
+    const chatOverview = summary.chat_overview || summary.conversation_summary;
+    const selfEvaluation = summary.self_evaluation;
+    const performanceEval = summary.performance_evaluation || {};
+    const expressionAbility = performanceEval.expression_ability || {};
+    const topicSelection = performanceEval.topic_selection || {};
+    const tags = summary.tags || [];
+    const attitudeAnalysis = summary.attitude_analysis || "";
 
     return (
         <div className="rounded-2xl border border-border-light bg-surface-light p-4 shadow-sm dark:border-border-dark dark:bg-surface-dark">
@@ -52,7 +62,10 @@ export default function ReviewSection({ conversationId }) {
                 {hasNodes ? (
                     <div className="flex items-center gap-2">
                         <button
-                            onClick={generate}
+                            onClick={async () => {
+                                await generate();
+                                if (onReviewGenerated) onReviewGenerated();
+                            }}
                             className="p-1 text-text-muted-light dark:text-text-muted-dark hover:text-primary transition-colors rounded hover:bg-surface-light dark:hover:bg-surface-dark/50"
                             title="重新生成复盘"
                         >
@@ -69,7 +82,10 @@ export default function ReviewSection({ conversationId }) {
                     </div>
                 ) : (
                     <button
-                        onClick={generate}
+                        onClick={async () => {
+                            await generate();
+                            if (onReviewGenerated) onReviewGenerated();
+                        }}
                         className="flex items-center gap-2 px-3 py-2 text-sm font-medium bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors"
                     >
                         <span className="material-symbols-outlined text-base">auto_awesome</span>
@@ -93,9 +109,71 @@ export default function ReviewSection({ conversationId }) {
                 )}
             </div>
 
-            <p className="text-sm text-text-light dark:text-text-dark line-clamp-3">
-                {summary.conversation_summary}
-            </p>
+            <div className="space-y-3">
+                {/* 用户表现评价 - 评分卡片 */}
+                {(expressionAbility.score !== null || topicSelection.score !== null || selfEvaluation) && (
+                    <div className="space-y-2">
+                        {(expressionAbility.score !== null || topicSelection.score !== null) && (
+                            <div className="grid grid-cols-2 gap-2">
+                                {expressionAbility.score !== null && (
+                                    <div className="rounded-xl bg-white/60 dark:bg-white/5 p-3 border border-border-light/60 dark:border-border-dark/60">
+                                        <div className="flex items-center justify-between mb-1">
+                                            <p className="text-xs text-text-muted-light dark:text-text-muted-dark">表述能力</p>
+                                            <span className="text-xs font-semibold text-primary">{expressionAbility.score}分</span>
+                                        </div>
+                                        {expressionAbility.description && (
+                                            <p className="text-xs text-text-light dark:text-text-dark leading-relaxed">{expressionAbility.description}</p>
+                                        )}
+                                    </div>
+                                )}
+                                {topicSelection.score !== null && (
+                                    <div className="rounded-xl bg-white/60 dark:bg-white/5 p-3 border border-border-light/60 dark:border-border-dark/60">
+                                        <div className="flex items-center justify-between mb-1">
+                                            <p className="text-xs text-text-muted-light dark:text-text-muted-dark">话题选择</p>
+                                            <span className="text-xs font-semibold text-primary">{topicSelection.score}分</span>
+                                        </div>
+                                        {topicSelection.description && (
+                                            <p className="text-xs text-text-light dark:text-text-dark leading-relaxed">{topicSelection.description}</p>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                        {selfEvaluation && (
+                            <div className="rounded-xl bg-white/60 dark:bg-white/5 p-3 border border-border-light/60 dark:border-border-dark/60">
+                                <p className="text-xs text-text-muted-light dark:text-text-muted-dark mb-1">整体表现评价</p>
+                                <p className="text-sm text-text-light dark:text-text-dark leading-relaxed">{selfEvaluation}</p>
+                            </div>
+                        )}
+                    </div>
+                )}
+                {/* 聊天概要 */}
+                {chatOverview && (
+                    <div className="rounded-xl bg-white/60 dark:bg-white/5 p-3 border border-border-light/60 dark:border-border-dark/60">
+                        <p className="text-xs text-text-muted-light dark:text-text-muted-dark mb-1">聊天概要</p>
+                        <p className="text-sm text-text-light dark:text-text-dark leading-relaxed">{chatOverview}</p>
+                    </div>
+                )}
+
+                {/* 标签 Tags */}
+                {tags.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                        {tags.map((tag, i) => (
+                            <span key={i} className="px-2 py-1 rounded-md bg-primary/10 text-primary text-xs font-medium">
+                                {tag}
+                            </span>
+                        ))}
+                    </div>
+                )}
+
+                {/* 对象态度分析 */}
+                {attitudeAnalysis && (
+                    <div className="rounded-xl bg-white/60 dark:bg-white/5 p-3 border border-border-light/60 dark:border-border-dark/60">
+                        <p className="text-xs text-text-muted-light dark:text-text-muted-dark mb-1">对象态度分析</p>
+                        <p className="text-sm text-text-light dark:text-text-dark leading-relaxed">{attitudeAnalysis}</p>
+                    </div>
+                )}
+            </div>
 
         </div>
     );

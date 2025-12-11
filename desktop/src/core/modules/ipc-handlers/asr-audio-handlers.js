@@ -65,6 +65,26 @@ export function registerASRAudioHandlers({
     }
   });
 
+  // 【仅云端】渲染进程 VAD 静音断句触发：提交当前分段，生成多条消息
+  ipcMain.on('asr-silence-commit', async (event, payload) => {
+    try {
+      const asrManager = getOrCreateASRManager();
+      if (!asrManager?.isInitialized || !asrManager?.isRunning) {
+        return;
+      }
+      const modelName = String(asrManager.modelName || '');
+      // 二次保险：只对 cloud 模型生效，避免影响 FunASR
+      if (!modelName.includes('cloud')) {
+        return;
+      }
+      const sourceId = payload?.sourceId;
+      if (!sourceId) return;
+      await asrManager.triggerSilenceCommit(sourceId);
+    } catch (error) {
+      console.error('Error handling asr-silence-commit:', error);
+    }
+  });
+
   ipcMain.handle('asr-check-ready', async () => {
     return await checkASRReady();
   });

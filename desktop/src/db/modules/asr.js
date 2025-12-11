@@ -372,13 +372,14 @@ export default function ASRManager(BaseClass) {
       if (count === 0) {
         console.log('No ASR config found, creating default config...');
 
-        // 默认使用 FunASR ONNX（跨平台统一）
-        const defaultModelName = 'funasr-paraformer';
+        // 默认使用 SiliconFlow Cloud（无需下载）
+        const defaultModelName = 'siliconflow-cloud';
         const defaultConfig = {
           model_name: defaultModelName,
           language: 'zh',
           enable_vad: 1,
-          sentence_pause_threshold: 1.0,
+          // 云端模式更适合更灵敏的停顿分句（仅影响 cloud 分句策略）
+          sentence_pause_threshold: 0.6,
           retain_audio_files: 0,
           audio_retention_days: 30,
           audio_storage_path: null,

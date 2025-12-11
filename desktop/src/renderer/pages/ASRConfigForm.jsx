@@ -54,7 +54,7 @@ export function ASRConfigForm({
           <input
             type="number"
             step="0.1"
-            min="0.5"
+            min="0.2"
             max="5.0"
             value={formData.sentence_pause_threshold}
             onChange={(e) => setFormData({ ...formData, sentence_pause_threshold: e.target.value })}

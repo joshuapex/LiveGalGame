@@ -83,6 +83,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteLLMConfig: (id) => ipcRenderer.invoke('llm-delete-config', id),
   testLLMConnection: (configData) => ipcRenderer.invoke('llm-test-connection', configData),
   setDefaultLLMConfig: (id) => ipcRenderer.invoke('llm-set-default-config', id),
+  getLLMFeatureConfigs: () => ipcRenderer.invoke('llm-get-feature-configs'),
+  setLLMFeatureConfig: (feature, llmConfigId) =>
+    ipcRenderer.invoke('llm-set-feature-config', { feature, llm_config_id: llmConfigId }),
   generateLLMSuggestions: (payload) => ipcRenderer.invoke('llm-generate-suggestions', payload),
   detectTopicShift: (payload) => ipcRenderer.invoke('llm-detect-topic-shift', payload),
   startSuggestionStream: (payload) => {

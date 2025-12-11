@@ -78,11 +78,9 @@ export default function SuggestionConfigManager(BaseClass) {
         silence_threshold_seconds: 3,
         message_threshold_count: 3,
         cooldown_seconds: 15,
-        context_message_limit: 10,
+        context_message_limit: 20,
         topic_detection_enabled: 0,
-        situation_llm_enabled: 0,
         model_name: 'gpt-4o-mini',
-        situation_model_name: 'gpt-4o-mini',
         thinking_enabled: 0,
         created_at: now,
         updated_at: now
@@ -119,9 +117,7 @@ export default function SuggestionConfigManager(BaseClass) {
         'cooldown_seconds',
         'context_message_limit',
         'topic_detection_enabled',
-        'situation_llm_enabled',
         'model_name',
-        'situation_model_name',
         'thinking_enabled'
       ];
 

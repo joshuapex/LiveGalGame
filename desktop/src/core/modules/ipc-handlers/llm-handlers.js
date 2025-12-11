@@ -69,6 +69,34 @@ export function registerLLMHandlers({ db }) {
     }
   });
 
+  ipcMain.handle('llm-get-feature-configs', () => {
+    try {
+      return db.getAllLLMFeatureConfigs();
+    } catch (error) {
+      console.error('Error getting LLM feature configs:', error);
+      return {};
+    }
+  });
+
+  ipcMain.handle('llm-get-feature-config', (event, feature) => {
+    try {
+      return db.getLLMFeatureConfig(feature);
+    } catch (error) {
+      console.error('Error getting LLM feature config:', error);
+      return null;
+    }
+  });
+
+  ipcMain.handle('llm-set-feature-config', (event, payload = {}) => {
+    try {
+      const { feature, llm_config_id } = payload;
+      return db.setLLMFeatureConfig(feature, llm_config_id || null);
+    } catch (error) {
+      console.error('Error setting LLM feature config:', error);
+      throw error;
+    }
+  });
+
   console.log('LLM IPC handlers registered');
 }
 

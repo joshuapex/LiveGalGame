@@ -108,10 +108,10 @@ export const useSuggestions = (sessionInfo) => {
       }
       const previousSuggestions = Array.isArray(suggestions) && suggestions.length
         ? suggestions.slice(0, suggestionConfig?.suggestion_count || 5).map((item) => ({
-            title: item.title || '',
-            content: item.content || '',
-            tags: item.tags || []
-          }))
+          title: item.title || '',
+          content: item.content || '',
+          tags: item.tags || []
+        }))
         : [];
       const streamId = `suggestion-stream-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
       console.log(`[useSuggestions] Generated streamId: ${streamId}`);
@@ -174,10 +174,10 @@ export const useSuggestions = (sessionInfo) => {
 
       const previousSuggestions = Array.isArray(suggestions) && suggestions.length
         ? suggestions.slice(0, suggestionConfig?.suggestion_count || 5).map((item) => ({
-            title: item.title || '',
-            content: item.content || '',
-            tags: item.tags || []
-          }))
+          title: item.title || '',
+          content: item.content || '',
+          tags: item.tags || []
+        }))
         : [];
 
       setSuggestionStatus('loading');
@@ -266,9 +266,9 @@ export const useSuggestions = (sessionInfo) => {
       const silenceSeconds =
         silenceSecondsRaw != null
           ? Math.min(
-              Math.max(Number.isFinite(silenceSecondsRaw) ? silenceSecondsRaw : 0, 0),
-              60
-            )
+            Math.max(Number.isFinite(silenceSecondsRaw) ? silenceSecondsRaw : 0, 0),
+            60
+          )
           : null;
       const burstCountRaw =
         opts.burstCountOverride !== undefined ? opts.burstCountOverride : characterPendingCount;
@@ -635,7 +635,7 @@ export const useSuggestions = (sessionInfo) => {
     // 方法
     handleGenerateSuggestions,
     triggerPassiveSuggestion,
-      triggerTopicChangeSuggestion: () => maybeRunSituationDetection('topic_change'),
+    triggerTopicChangeSuggestion: () => maybeRunSituationDetection('topic_change'),
     handleCopySuggestion,
     handleNewMessage,
     clearSuggestionError,

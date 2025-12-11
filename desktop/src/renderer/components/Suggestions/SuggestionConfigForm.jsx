@@ -82,9 +82,8 @@ export const SuggestionConfigForm = ({
       </div>
 
       <div
-        className={`grid gap-4 md:grid-cols-2 ${
-          form.enable_passive_suggestion ? '' : 'opacity-50 pointer-events-none select-none'
-        }`}
+        className={`grid gap-4 md:grid-cols-2 ${form.enable_passive_suggestion ? '' : 'opacity-50 pointer-events-none select-none'
+          }`}
       >
         <div>
           <label className="block text-sm font-medium text-text-light dark:text-text-dark mb-1">
@@ -110,13 +109,13 @@ export const SuggestionConfigForm = ({
           <input
             type="number"
             min={4}
-            max={20}
+            max={50}
             value={form.context_message_limit ?? ''}
             onChange={onNumberChange('context_message_limit')}
             className="w-full px-3 py-2 border border-border-light dark:border-border-dark rounded-lg bg-surface-light dark:bg-surface-dark text-text-light dark:text-text-dark focus:outline-none focus:ring-2 focus:ring-primary/50"
           />
           <p className="text-xs text-text-muted-light dark:text-text-muted-dark mt-1">
-            仅截取最近 N 条历史，控制调用成本。
+            仅截取最近 N 条历史，建议 20-50 条以获得更好的建议质量。
           </p>
         </div>
 

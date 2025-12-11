@@ -32,7 +32,7 @@ DEFAULT_ENGINE = os.environ.get("ASR_ENGINE", "funasr").lower()
 DEFAULT_MODEL = os.environ.get("ASR_MODEL", "funasr-paraformer")
 
 # 支持的引擎列表
-SUPPORTED_ENGINES = {"funasr"}
+SUPPORTED_ENGINES = {"funasr", "siliconflow"}
 
 
 def _print_debug_info():
@@ -62,7 +62,7 @@ def _print_debug_info():
             print(f"  ASR_DIR list error: {e}", file=sys.stderr)
     
     # 检查 worker 脚本
-    for worker_name in ["asr_funasr_worker.py", "asr_worker.py"]:
+    for worker_name in ["asr_funasr_worker.py", "asr_siliconflow_worker.py", "asr_worker.py"]:
         worker_path = ASR_DIR / worker_name
         print(f"  {worker_name}: {worker_path} (exists={worker_path.exists()})", file=sys.stderr)
     
@@ -120,6 +120,8 @@ class WorkerBridge:
         base_dir = ASR_DIR
         if self.engine == "funasr":
             return base_dir / "asr_funasr_worker.py"
+        if self.engine == "siliconflow":
+            return base_dir / "asr_siliconflow_worker.py"
         # Fallback to generic worker
         return base_dir / "asr_worker.py"
 

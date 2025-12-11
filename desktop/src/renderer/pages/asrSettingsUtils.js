@@ -35,6 +35,7 @@ export function isPresetActive(preset, activeModelId) {
 
 export const engineNames = {
   funasr: 'FunASR',
+  siliconflow: 'SiliconFlow（云端）',
 };
 
 export const languageOptions = [

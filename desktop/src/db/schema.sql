@@ -106,6 +106,15 @@ CREATE TABLE IF NOT EXISTS llm_configs (
   updated_at INTEGER NOT NULL
 );
 
+-- LLM 功能绑定表（为特定功能选择指定的 LLM 配置；未配置则回落到默认 LLM）
+CREATE TABLE IF NOT EXISTS llm_feature_configs (
+  feature TEXT PRIMARY KEY, -- 功能标识，如 suggestion / situation / review
+  llm_config_id TEXT, -- 绑定的 llm_configs.id
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (llm_config_id) REFERENCES llm_configs(id) ON DELETE SET NULL
+);
+
 -- 对话建议配置表
 CREATE TABLE IF NOT EXISTS suggestion_configs (
   id TEXT PRIMARY KEY,

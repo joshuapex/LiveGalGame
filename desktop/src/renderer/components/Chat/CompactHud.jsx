@@ -59,7 +59,7 @@ export const CompactHud = ({
               </div>
               {listeningLabel}
             </div>
-            
+
             <div className="listening-popover">
               <div className="listening-row">
                 <span className="listening-tag">ME</span>
@@ -149,13 +149,13 @@ export const CompactHud = ({
                 <div className="compact-tag-group">
                   {item.displayTags?.length
                     ? item.displayTags.map((tag, tagIdx) => (
-                        <span
-                          key={`${item.id || `compact-${index}`}-tag-${tagIdx}`}
-                          className={`compact-tag ${TAG_CLASSES[tagIdx % TAG_CLASSES.length]}`}
-                        >
-                          {tag}
-                        </span>
-                      ))
+                      <span
+                        key={`${item.id || `compact-${index}`}-tag-${tagIdx}`}
+                        className={`compact-tag ${TAG_CLASSES[tagIdx % TAG_CLASSES.length]}`}
+                      >
+                        {tag}
+                      </span>
+                    ))
                     : (
                       <span className={`compact-tag ${item.tagClass || TAG_CLASSES[index % TAG_CLASSES.length]}`}>
                         {item.displayTitle}
@@ -172,10 +172,13 @@ export const CompactHud = ({
           <span className="compact-model-label">Model: {modelName}</span>
           <button
             className="refresh-btn"
-            onClick={() => onGenerate({ trigger: 'manual', reason: 'manual' })}
+            onClick={() => onGenerate({
+              trigger: 'manual',
+              reason: hasSuggestions ? 'refresh' : 'manual'
+            })}
             disabled={suggestionStatus === 'loading' || suggestionStatus === 'streaming'}
           >
-            {hasSuggestions ? '换一批' : '生成建议'}
+            {hasSuggestions ? '🔄 换一批' : '生成建议'}
           </button>
         </div>
       </div>

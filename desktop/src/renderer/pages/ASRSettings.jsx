@@ -42,10 +42,11 @@ function ASRSettings() {
 
   // 表单数据
   const [formData, setFormData] = useState({
-    model_name: 'funasr-paraformer',
+    model_name: 'siliconflow-cloud',
     language: 'zh',
     enable_vad: true,
-    sentence_pause_threshold: 1.0,
+    // 云端默认更灵敏；FunASR 实际会在主进程侧做下限保护，不会被该默认值影响
+    sentence_pause_threshold: 0.6,
     retain_audio_files: false,
     audio_retention_days: 30,
     audio_storage_path: ''
@@ -400,10 +401,10 @@ function ASRSettings() {
   // 重置表单
   const resetForm = () => {
     setFormData({
-      model_name: modelPresets[0]?.id || 'funasr-paraformer',
+      model_name: modelPresets[0]?.id || 'siliconflow-cloud',
       language: 'zh',
       enable_vad: true,
-      sentence_pause_threshold: 1.0,
+      sentence_pause_threshold: 0.6,
       retain_audio_files: false,
       audio_retention_days: 30,
       audio_storage_path: ''
@@ -613,26 +614,69 @@ function ASRSettings() {
 
       {/* 默认配置信息 */}
       {asrDefaultConfig && (
-        <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-          <div className="flex items-center">
-            <div className="flex-shrink-0">
-              <svg className="h-5 w-5 text-blue-600" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-              </svg>
-            </div>
-            <div className="ml-3">
-              <h3 className="text-sm font-medium text-blue-800">
-                当前默认配置: {asrDefaultConfig.model_name}
-              </h3>
-              <div className="mt-1 text-sm text-blue-700">
-                <p>语言: {asrDefaultConfig.language === 'zh' ? '中文' : asrDefaultConfig.language}</p>
-                <p>VAD: {asrDefaultConfig.enable_vad ? '已启用' : '已禁用'}</p>
-                {asrDefaultConfig.retain_audio_files && (
-                  <p>录音保留: {asrDefaultConfig.audio_retention_days} 天</p>
-                )}
+        <div className="mb-6 space-y-4">
+          <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+            <div className="flex items-center">
+              <div className="flex-shrink-0">
+                <svg className="h-5 w-5 text-blue-600" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                </svg>
+              </div>
+              <div className="ml-3">
+                <h3 className="text-sm font-medium text-blue-800">
+                  当前默认配置: {asrDefaultConfig.model_name}
+                </h3>
+                <div className="mt-1 text-sm text-blue-700">
+                  <p>语言: {asrDefaultConfig.language === 'zh' ? '中文' : asrDefaultConfig.language}</p>
+                  <p>VAD: {asrDefaultConfig.enable_vad ? '已启用' : '已禁用'}</p>
+                  {asrDefaultConfig.retain_audio_files && (
+                    <p>录音保留: {asrDefaultConfig.audio_retention_days} 天</p>
+                  )}
+                </div>
               </div>
             </div>
           </div>
+
+          {/* 本地模型警告信息 */}
+          {asrDefaultConfig.model_name && !asrDefaultConfig.model_name.includes('cloud') && (
+            <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
+              <div className="flex items-start">
+                <div className="flex-shrink-0 mt-0.5">
+                  <span className="material-symbols-outlined text-amber-600">warning</span>
+                </div>
+                <div className="ml-3">
+                  <h3 className="text-sm font-medium text-amber-800">
+                    正在使用本地模型
+                  </h3>
+                  <div className="mt-1 text-sm text-amber-700 space-y-1">
+                    <p>• 本地模型需要下载较大的模型文件（约 1-3GB），且需要占用较多的系统资源（CPU/内存）。</p>
+                    <p>• 优势：响应速度更快（低延迟），数据完全本地处理，隐私性更好。</p>
+                    <p>• 如果您的设备性能较弱，推荐切换回 <b>SiliconFlow Cloud</b> 远程模式。</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 远程模型提示信息 */}
+          {asrDefaultConfig.model_name && asrDefaultConfig.model_name.includes('cloud') && (
+             <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+              <div className="flex items-start">
+                <div className="flex-shrink-0 mt-0.5">
+                  <span className="material-symbols-outlined text-green-600">cloud_done</span>
+                </div>
+                <div className="ml-3">
+                  <h3 className="text-sm font-medium text-green-800">
+                    正在使用远程云端模型 (推荐)
+                  </h3>
+                  <div className="mt-1 text-sm text-green-700 space-y-1">
+                    <p>• 无需下载模型文件，不占用本地算力。</p>
+                    <p>• 依赖网络连接，可能会有轻微的网络延迟。</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

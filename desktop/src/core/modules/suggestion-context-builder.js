@@ -1,5 +1,5 @@
-const DEFAULT_MESSAGE_LIMIT = 10;
-const MAX_MESSAGE_CHARS = 320;
+const DEFAULT_MESSAGE_LIMIT = 20;
+const MAX_MESSAGE_CHARS = 500;
 
 const POSITIVE_KEYWORDS = ['谢谢', '感激', '喜欢', '开心', '愉快', '高兴', '满意'];
 const NEGATIVE_KEYWORDS = ['生气', '难过', '失望', '烦', '累', '不爽', '吵'];
@@ -114,15 +114,35 @@ export function buildCharacterProfile(character, details, affinityStage) {
   return parts.join(' | ');
 }
 
-export function formatMessageHistory(messages = []) {
+const formatRelativeTime = (timestamp) => {
+  if (!timestamp) return '';
+  const now = Date.now();
+  const diff = Math.floor((now - timestamp) / 1000); // seconds
+  if (diff < 60) return `${diff}秒前`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}分钟前`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}小时前`;
+  return `${Math.floor(diff / 86400)}天前`;
+};
+
+export function formatMessageHistory(messages = [], totalCount = null) {
   if (!messages.length) return '暂无历史消息。';
-  return messages
-    .map((msg) => {
-      const sender = msg.sender === 'user' ? '玩家' : '角色';
-      const content = sanitizeText(msg.content || msg.text || '');
-      return `${sender}：${content}`;
-    })
-    .join('\n');
+
+  const lines = [];
+
+  // 如果总数大于展示数量，添加提示
+  if (totalCount && totalCount > messages.length) {
+    lines.push(`【对话历史（共 ${totalCount} 条，显示最近 ${messages.length} 条）】`);
+  }
+
+  messages.forEach((msg) => {
+    const sender = msg.sender === 'user' ? '玩家' : '角色';
+    const content = sanitizeText(msg.content || msg.text || '');
+    const timeTag = formatRelativeTime(msg.timestamp);
+    const prefix = timeTag ? `[${timeTag}] ` : '';
+    lines.push(`${prefix}${sender}：${content}`);
+  });
+
+  return lines.join('\n');
 }
 
 export function buildSuggestionContext(db, options = {}) {
@@ -138,6 +158,12 @@ export function buildSuggestionContext(db, options = {}) {
   const history = conversationId
     ? db.getRecentMessagesByConversation(conversationId, messageLimit || DEFAULT_MESSAGE_LIMIT)
     : [];
+
+  // 获取总消息数量（用于显示提示）
+  const totalMessageCount = conversationId
+    ? (db.getMessagesByConversation?.(conversationId)?.length || history.length)
+    : history.length;
+
   const affinityStage = getAffinityStage(character?.affinity);
   const emotion = analyzeLastMessageEmotion(history);
 
@@ -146,8 +172,9 @@ export function buildSuggestionContext(db, options = {}) {
     character,
     characterDetails,
     history,
+    totalMessageCount,
     characterProfile: buildCharacterProfile(character, characterDetails, affinityStage),
-    historyText: formatMessageHistory(history),
+    historyText: formatMessageHistory(history, totalMessageCount),
     affinityStage,
     emotion
   };

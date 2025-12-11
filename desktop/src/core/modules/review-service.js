@@ -2,9 +2,10 @@
 export default class ReviewService {
     constructor(dbGetter) {
         this.dbGetter = dbGetter;
-        this.client = null;
-        this.clientConfigSignature = null;
+        this.clientPool = {};
+        this.clientConfigSignature = null; // 保留兼容字段
         this.currentLLMConfig = null;
+        this.currentLLMFeature = 'review';
     }
 
     get db() {
@@ -15,14 +16,18 @@ export default class ReviewService {
         return db;
     }
 
-    async ensureClient() {
-        const llmConfig = this.db.getDefaultLLMConfig();
+    async ensureClient(feature = 'review') {
+        const featureKey = typeof feature === 'string' && feature.trim() ? feature.trim().toLowerCase() : 'review';
+        const llmConfig =
+            (this.db.getLLMConfigForFeature && this.db.getLLMConfigForFeature(featureKey)) ||
+            this.db.getDefaultLLMConfig();
         if (!llmConfig) {
             throw new Error('未找到默认LLM配置，请先在设置中配置。');
         }
 
-        const signature = `${llmConfig.id || 'unknown'}-${llmConfig.updated_at || 0}`;
-        if (!this.client || this.clientConfigSignature !== signature) {
+        const signature = `${featureKey}:${llmConfig.id || 'unknown'}-${llmConfig.updated_at || 0}`;
+        const cached = this.clientPool[featureKey];
+        if (!cached || cached.signature !== signature) {
             const { default: OpenAI } = await import('openai');
             const clientConfig = { apiKey: llmConfig.api_key };
             if (llmConfig.base_url) {
@@ -30,12 +35,16 @@ export default class ReviewService {
                 const baseURL = llmConfig.base_url.replace(/\/chat\/completions\/?$/, '');
                 clientConfig.baseURL = baseURL;
             }
-            this.client = new OpenAI(clientConfig);
-            this.clientConfigSignature = signature;
+            this.clientPool[featureKey] = {
+                client: new OpenAI(clientConfig),
+                signature,
+                config: llmConfig
+            };
         }
 
         this.currentLLMConfig = llmConfig;
-        return this.client;
+        this.currentLLMFeature = featureKey;
+        return this.clientPool[featureKey].client;
     }
 
     // 1. 生成复盘报告
@@ -56,8 +65,11 @@ export default class ReviewService {
         const nodes = this.groupIntoNodes(suggestions);
         const conversation = this.db.getConversationById(conversationId);
 
-        // 3. 特殊情况：无节点，直接使用兜底简要复盘（无需调用 LLM）
-        if (nodes.length === 0) {
+        // 3. 特殊情况处理：
+        // - 如果没有节点但有消息，仍然走 LLM 复盘（不降级），让模型给出完整总结
+        // - 如果既没有节点也没有消息，才使用兜底简要复盘
+        const hasMessages = Array.isArray(messages) && messages.length > 0;
+        if (nodes.length === 0 && !hasMessages) {
             const simpleReview = this.buildSimpleSummary(conversation);
             this.db.saveConversationReview({
                 conversation_id: conversationId,
@@ -88,6 +100,19 @@ export default class ReviewService {
             review_data: reviewData,
             model_used: this.currentLLMConfig?.model_name || 'unknown'
         });
+
+        // 8. 更新会话信息（标题、摘要、Tag、好感度）
+        if (reviewData.summary) {
+            const updates = {};
+            if (reviewData.summary.title) updates.title = reviewData.summary.title;
+            if (reviewData.summary.conversation_summary) updates.summary = reviewData.summary.conversation_summary;
+            if (Array.isArray(reviewData.summary.tags)) updates.tags = reviewData.summary.tags.join(',');
+            if (reviewData.summary.total_affinity_change !== undefined) updates.affinity_change = reviewData.summary.total_affinity_change;
+
+            if (Object.keys(updates).length > 0) {
+                this.db.updateConversation(conversationId, updates);
+            }
+        }
 
         return reviewData;
     }
@@ -142,7 +167,7 @@ export default class ReviewService {
         // 限制每个节点的suggestion数量，最多保留3个
         return groups.map((group, index) => {
             let filteredGroup = group;
-            
+
             if (group.length > 3) {
                 // 如果一组中有超过3个suggestion，可能是多次生成的结果
                 // 按index排序，优先保留index 0,1,2的完整批次
@@ -151,7 +176,7 @@ export default class ReviewService {
                     const bIndex = b.index !== undefined ? b.index : 999;
                     return aIndex - bIndex;
                 });
-                
+
                 // 找出第一个完整的批次（index 0,1,2）
                 const firstBatch = sortedByIndex.filter(s => s.index !== undefined && s.index < 3);
                 if (firstBatch.length === 3) {
@@ -162,7 +187,7 @@ export default class ReviewService {
                 }
                 console.warn(`[ReviewService] Node ${index + 1} has ${group.length} suggestions (expected 3), limiting to ${filteredGroup.length}. IDs: ${group.map(s => s.id).join(', ')}`);
             }
-            
+
             return {
                 node_id: `node_${index + 1}`,
                 timestamp: filteredGroup[0].created_at,
@@ -183,7 +208,7 @@ export default class ReviewService {
             `[${formatTime(m.timestamp)}] ${m.sender === 'user' ? 'User' : 'Character'}: ${m.content}`
         ).join('\n');
 
-        const nodeInfo = nodes.length > 0 
+        const nodeInfo = nodes.length > 0
             ? nodes.map((node, i) => {
                 const options = node.suggestions.map(s => `  - ID:${s.id} 内容:${s.content || s.title}`).join('\n');
                 return `节点${i + 1} (ID: ${node.node_id}, Time: ${formatTime(node.timestamp)}):\n${options}`;
@@ -196,6 +221,16 @@ export default class ReviewService {
 
 # Task
 ${nodes.length > 0 ? '根据对话记录和已知的"关键节点"（系统当时生成选项的时刻），判断用户实际选择了什么，并总结对话。' : '根据对话记录，总结对话内容并评估好感度变化。'}
+补充以下内容：
+1. 用户表现评价：对用户在本次对话中的表现做详细评价，包括：
+   - 表述能力评分（0-100分）和一句话评价（10~30字）
+   - 话题选择评分（0-100分）和一句话评价（10~30字）
+2. 标题与概要：
+   - 为本次对话生成一个标题（title），6-15字，吸引人且概括核心内容。
+   - 用1-2句话概述对话主题/走向（conversation_summary），适合直接展示给用户。
+   - 整体表现评价（10~40字）
+3. 对话标签（Tag）：生成3-5个简短的标签（如：破冰、分享、幽默、关心），概括对话特点。
+4. 对象态度分析：详细分析对象对用户的好感度变化和态度倾向（20~50字）。
 
 # Input
 
@@ -213,8 +248,8 @@ review_nodes[${nodes.length}]{node_id,title,choice_type,matched_id,confidence,us
 <节点ID>,<标题>,<matched/custom>,<匹配ID>,<置信度0-1>,<用户行为描述>,<原因分析>
 
 第二部分：整体总结（单独一行）` : `第一部分：整体总结（单独一行）`}
-review_summary[1]{total_affinity_change,conversation_summary}:
-<好感度变化整数>,<对话整体概述>
+review_summary[1]{total_affinity_change,title,conversation_summary,self_evaluation,chat_overview,expression_score,expression_desc,topic_score,topic_desc,tags,attitude_analysis}:
+<好感度变化整数>,<对话标题>,<对话整体概述>,<用户整体表现评价>,<对话概要>,<表述能力评分0-100>,<表述能力描述>,<话题选择评分0-100>,<话题选择描述>,<标签列表（分号分隔）>,<对象态度分析>
 
 # 规则
 ${nodes.length > 0 ? `- choice_type: 如果用户的回复语义接近某选项 → matched，否则 → custom
@@ -228,14 +263,14 @@ ${nodes.length > 0 ? `- choice_type: 如果用户的回复语义接近某选项 
 ${nodes.length > 0 ? `review_nodes[2]{node_id,title,choice_type,matched_id,confidence,user_desc,reasoning}:
 node_1,初次问候,matched,sugg_101,0.92,主动打招呼表达惊喜,积极社交建立好感
 node_2,深入交流,custom,,0.3,"聊了冰岛旅行和极光",独特故事引发兴趣
-review_summary[1]{total_affinity_change,conversation_summary}:
-+16,整体对话轻松愉快，双方互有好感，关系稳步推进` : `review_summary[1]{total_affinity_change,conversation_summary}:
-+5,双方进行了简单的日常寒暄，氛围和谐。`}
+review_summary[1]{total_affinity_change,title,conversation_summary,self_evaluation,chat_overview,expression_score,expression_desc,topic_score,topic_desc,tags,attitude_analysis}:
++16,浪漫极光之旅,整体对话轻松愉快，双方互有好感，关系稳步推进,整体回应礼貌主动，能跟随对方话题,围绕旅行经历展开分享，氛围轻松友好,85,表达自然流畅，用词恰当,88,话题选择合适，能引发共鸣,轻松;分享;共鸣;旅行,对方表现出浓厚的兴趣，主动分享个人经历，好感度有显著提升。` : `review_summary[1]{total_affinity_change,title,conversation_summary,self_evaluation,chat_overview,expression_score,expression_desc,topic_score,topic_desc,tags,attitude_analysis}:
++5,初次见面寒暄,双方进行了简单的日常寒暄，氛围和谐。,回复自然有礼，能给予积极反馈,聊了日常和兴趣，气氛温和友善。,82,表达自然有礼,85,话题选择合适,日常;寒暄;温和,对方态度友善，回应积极，但尚未深入交流，保持礼貌距离。`}
 `;
     }
 
     async callLLMForReview(messages, nodes) {
-        const client = await this.ensureClient();
+        const client = await this.ensureClient('review');
         const prompt = this.buildReviewPrompt(messages, nodes);
 
         console.log('[ReviewService] Sending prompt to LLM:', prompt);
@@ -248,8 +283,12 @@ review_summary[1]{total_affinity_change,conversation_summary}:
             stream: false
         });
 
-        const content = completion.choices[0].message.content;
+        const content = completion.choices[0]?.message?.content;
         console.log('[ReviewService] LLM Response:', content);
+
+        if (!content || !content.trim()) {
+            throw new Error('LLM response is empty or invalid');
+        }
 
         return this.parseReviewToon(content, nodes);
     }
@@ -278,6 +317,14 @@ review_summary[1]{total_affinity_change,conversation_summary}:
     }
 
     parseReviewToon(text, originalNodes) {
+        if (!text) {
+            return {
+                version: "1.0",
+                has_nodes: originalNodes && originalNodes.length > 0,
+                summary: {},
+                nodes: []
+            };
+        }
         const lines = text.split('\n').filter(l => l.trim());
 
         const result = {
@@ -289,15 +336,37 @@ review_summary[1]{total_affinity_change,conversation_summary}:
 
         // 解析 summary
         const summaryHeaderRegex = /^review_summary\[(\d+)\]\{([^}]+)\}:?/;
-        const summaryDataLine = lines.find((l, i) => i > 0 && lines[i - 1].match(summaryHeaderRegex));
-        if (summaryDataLine) {
-            const parts = this.csvSplit(summaryDataLine);
-            // header fields: total_affinity_change, conversation_summary
-            result.summary.total_affinity_change = parseInt(parts[0]) || 0;
-            result.summary.conversation_summary = parts[1] || "";
-        } else {
-            // Fallback try to find any line that looks like summary
-            // ... implementation detail, maybe unnecessary if LLM is good
+        const summaryHeaderIndex = lines.findIndex(l => l.match(summaryHeaderRegex));
+        if (summaryHeaderIndex !== -1 && lines[summaryHeaderIndex + 1]) {
+            const headerMatch = lines[summaryHeaderIndex].match(summaryHeaderRegex);
+            const fields = headerMatch?.[2]?.split(',').map(f => f.trim()) || [];
+            const parts = this.csvSplit(lines[summaryHeaderIndex + 1]);
+            const summaryMap = {};
+            fields.forEach((field, idx) => {
+                summaryMap[field] = parts[idx] ?? '';
+            });
+
+            result.summary.total_affinity_change = parseInt(summaryMap.total_affinity_change) || 0;
+            result.summary.title = summaryMap.title || "";
+            // 优先 chat_overview 填充概要，其次 conversation_summary
+            result.summary.conversation_summary = summaryMap.conversation_summary || summaryMap.chat_overview || "";
+            result.summary.self_evaluation = summaryMap.self_evaluation || "";
+            result.summary.chat_overview = summaryMap.chat_overview || result.summary.conversation_summary;
+            // 解析用户表现评价的评分
+            result.summary.performance_evaluation = {
+                expression_ability: {
+                    score: parseInt(summaryMap.expression_score) || null,
+                    description: summaryMap.expression_desc || ""
+                },
+                topic_selection: {
+                    score: parseInt(summaryMap.topic_score) || null,
+                    description: summaryMap.topic_desc || ""
+                }
+            };
+            // 解析 Tags
+            result.summary.tags = (summaryMap.tags || "").split(/[;；]/).map(t => t.trim()).filter(Boolean);
+            // 解析对象态度分析
+            result.summary.attitude_analysis = summaryMap.attitude_analysis || "";
         }
 
         // 解析 nodes
@@ -353,7 +422,21 @@ review_summary[1]{total_affinity_change,conversation_summary}:
                 node_count: 0,
                 matched_count: 0,
                 custom_count: 0,
-                conversation_summary: summaryText || "本次对话较为顺畅，无需特别决策点。"
+                conversation_summary: summaryText || "本次对话较为顺畅，无需特别决策点。",
+                self_evaluation: "暂无复盘评价。",
+                chat_overview: summaryText || "本次对话较为顺畅，无需特别决策点。",
+                performance_evaluation: {
+                    expression_ability: {
+                        score: null,
+                        description: ""
+                    },
+                    topic_selection: {
+                        score: null,
+                        description: ""
+                    }
+                },
+                tags: [],
+                attitude_analysis: "暂无态度分析。"
             },
             nodes: []
         };
@@ -393,6 +476,39 @@ review_summary[1]{total_affinity_change,conversation_summary}:
         }
         if (!safe.summary.conversation_summary) {
             safe.summary.conversation_summary = "本次对话复盘已生成。";
+        }
+        if (!safe.summary.chat_overview) {
+            safe.summary.chat_overview = safe.summary.conversation_summary;
+        }
+        if (!safe.summary.self_evaluation) {
+            safe.summary.self_evaluation = "暂无复盘评价。";
+        }
+        // 确保performance_evaluation字段存在
+        if (!safe.summary.performance_evaluation) {
+            safe.summary.performance_evaluation = {
+                expression_ability: {
+                    score: null,
+                    description: ""
+                },
+                topic_selection: {
+                    score: null,
+                    description: ""
+                }
+            };
+        } else {
+            // 确保子字段存在
+            if (!safe.summary.performance_evaluation.expression_ability) {
+                safe.summary.performance_evaluation.expression_ability = { score: null, description: "" };
+            }
+            if (!safe.summary.performance_evaluation.topic_selection) {
+                safe.summary.performance_evaluation.topic_selection = { score: null, description: "" };
+            }
+        }
+        if (!safe.summary.tags) {
+            safe.summary.tags = [];
+        }
+        if (!safe.summary.attitude_analysis) {
+            safe.summary.attitude_analysis = "暂无态度分析。";
         }
 
         return safe;
