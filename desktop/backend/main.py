@@ -429,5 +429,33 @@ def main():
 
 
 if __name__ == "__main__":
+    import runpy
+
+    # Simple argument parsing to support running worker scripts in packaged environment
+    if len(sys.argv) > 1 and sys.argv[1].endswith(".py"):
+        script_path = Path(sys.argv[1])
+        # Security check: only allow running scripts from ASR_DIR
+        try:
+            is_relative = script_path.resolve().is_relative_to(ASR_DIR.resolve())
+        except ValueError:
+            is_relative = False
+            
+        if script_path.exists() and (is_relative or os.environ.get("ALLOW_ARBITRARY_SCRIPTS") == "1"):
+            # Adjust sys.argv so the script sees itself as argv[0]
+            sys.argv = sys.argv[1:]
+            print(f"[ASR Launcher] Running script: {script_path}", file=sys.stderr)
+            try:
+                runpy.run_path(str(script_path), run_name="__main__")
+            except Exception as e:
+                print(f"[ASR Launcher] Error running script: {e}", file=sys.stderr)
+                import traceback
+                traceback.print_exc()
+                sys.exit(1)
+            sys.exit(0)
+        else:
+             print(f"[ASR Launcher] Script not found or not allowed: {script_path}", file=sys.stderr)
+             if not is_relative:
+                 print(f"[ASR Launcher] Script must be in {ASR_DIR}", file=sys.stderr)
+
     main()
 
