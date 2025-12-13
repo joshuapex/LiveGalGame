@@ -81,6 +81,19 @@ jobs:
         run: |
           node -e "const v=require('./package.json').version; console.log('app_version='+v)" >> "$GITHUB_OUTPUT"
 
+      - name: Build ASR backend
+        working-directory: desktop
+        run: pnpm run build:backend
+
+      - name: Verify backend build
+        run: |
+          if [ ! -d "desktop/backend/dist/asr-backend" ]; then
+            echo "❌ Backend build failed: asr-backend directory not found"
+            ls -la desktop/backend/dist/ || echo "dist directory does not exist"
+            exit 1
+          fi
+          echo "✅ Backend build successful"
+
       - name: Build desktop package
         env:
           PYTHON: ${{ matrix.python }}
