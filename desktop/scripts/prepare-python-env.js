@@ -224,6 +224,7 @@ function installDeps() {
             'python-multipart>=0.0.9',
             'soundfile>=0.12.1',
             'numpy>=1.26.4,<2',
+            'jieba>=0.42.1',
             'requests[socks]>=2.31.0',
             'httpx[socks]>=0.27.0',
           ];

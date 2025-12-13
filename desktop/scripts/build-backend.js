@@ -70,14 +70,17 @@ function main() {
     `--add-data "${asrDir}${dataSep}asr"`,
     // 隐式依赖收集：确保 funasr_onnx 等在主包中一次性收集
     '--collect-submodules funasr_onnx',
+    '--collect-submodules jieba',
     '--collect-submodules ctranslate2',
     '--collect-submodules tokenizers',
     '--collect-submodules sentencepiece',
+    '--collect-all jieba',
     '--collect-all ctranslate2',
     '--collect-all tokenizers',
     '--collect-all sentencepiece',
     '--collect-all numpy',
     '--hidden-import funasr_onnx',
+    '--hidden-import jieba',
   ];
 
   // 统一使用 onedir，避免 onefile 的压缩/解压开销
