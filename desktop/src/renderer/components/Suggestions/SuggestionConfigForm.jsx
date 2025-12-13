@@ -48,39 +48,6 @@ export const SuggestionConfigForm = ({
         </div>
       )}
 
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between p-4 rounded-lg border border-border-light dark:border-border-dark bg-yellow-50/50 dark:bg-yellow-900/10">
-        <div className="flex-1">
-          <p className="font-medium text-text-light dark:text-text-dark flex items-center gap-2">
-            启用思考过程
-            <span className="text-xs px-2 py-0.5 rounded bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300">
-              实验性功能
-            </span>
-          </p>
-          <p className="text-sm text-text-muted-light dark:text-text-muted-dark mt-1">
-            允许模型在生成建议前进行思考（开启后将显著增加选项生成时间）。
-          </p>
-          <p className="text-sm text-text-muted-light dark:text-text-muted-dark mt-1">
-            提醒：用于“是否需要生成选项”的判定模型请务必保持关闭思考，否则会拖慢触发判断。
-          </p>
-          {form.thinking_enabled && (
-            <p className="text-sm text-yellow-600 dark:text-yellow-400 mt-2 font-medium">
-              ⚠️ 已开启思考，生成时间会明显变长，请仅在需要更高质量输出时使用。
-            </p>
-          )}
-        </div>
-        <label className="inline-flex items-center gap-2 cursor-pointer flex-shrink-0">
-          <span className="text-sm text-text-muted-light dark:text-text-muted-dark">
-            {form.thinking_enabled ? '已启用' : '已关闭'}
-          </span>
-          <input
-            type="checkbox"
-            checked={form.thinking_enabled || false}
-            onChange={(e) => onUpdateField('thinking_enabled', e.target.checked)}
-            className="w-5 h-5 text-primary border-border-light dark:border-border-dark rounded focus:ring-primary"
-          />
-        </label>
-      </div>
-
       <div
         className={`grid gap-4 md:grid-cols-2 ${form.enable_passive_suggestion ? '' : 'opacity-50 pointer-events-none select-none'
           }`}

@@ -115,7 +115,6 @@ export default class LLMSuggestionService {
     const suggestionConfig = this.db.getSuggestionConfig();
     const count = this.sanitizeCount(optionCount ?? suggestionConfig?.suggestion_count, 3);
     const contextLimit = messageLimit || suggestionConfig?.context_message_limit || 10;
-    const thinkingEnabled = suggestionConfig?.thinking_enabled === 1 || suggestionConfig?.thinking_enabled === true;
     const client = await this.ensureClient('suggestion');
     const modelName = this.resolveModelName(this.currentLLMConfig, suggestionConfig);
 
@@ -138,8 +137,6 @@ export default class LLMSuggestionService {
       temperature: trigger === 'manual' ? 0.8 : 0.6,
       max_tokens: 4096,
       stream: true,
-      // 根据配置决定是否启用思考过程
-      thinking: { type: thinkingEnabled ? 'enabled' : 'disabled' },
       messages: [
         {
           role: 'system',
@@ -157,7 +154,7 @@ export default class LLMSuggestionService {
     console.log('[LLMSuggestionService] Starting stream with payload:', payload);
 
     const abortController = new AbortController();
-    // 增加超时时间以适应 Thinking 模型较长的输出
+    // 增加超时时间，避免在上下文较长或网络波动时误触发超时
     const timeoutId = setTimeout(() => {
       console.error('[LLMSuggestionService] Stream timed out after', STREAM_TIMEOUT_MS * 2, 'ms');
       abortController.abort(new Error('LLM生成超时，请稍后重试'));
@@ -283,10 +280,7 @@ export default class LLMSuggestionService {
       });
 
       console.log('[LLMSuggestionService] Creating OpenAI stream...');
-      const stream = await client.chat.completions.create({
-        ...requestParams,
-        signal: abortController.signal
-      });
+      const stream = await client.chat.completions.create(requestParams, { signal: abortController.signal });
       console.log('[LLMSuggestionService] OpenAI stream created successfully');
 
       console.log('[LLMSuggestionService] Starting to process chunks...');
@@ -772,8 +766,6 @@ export default class LLMSuggestionService {
       temperature: 0,
       max_tokens: 120,
       stream: true,
-      // 情景判定模型必须关闭思考，避免拖慢触发判断
-      thinking: { type: 'disabled' },
       messages: [
         {
           role: 'system',
@@ -816,11 +808,7 @@ export default class LLMSuggestionService {
 
     try {
       const stream = await this.runWithTimeout(
-        client.chat.completions.create({
-          ...requestParams,
-          stream: true,
-          signal: controller.signal
-        }),
+        client.chat.completions.create(requestParams, { signal: controller.signal }),
         DEFAULT_SITUATION_TIMEOUT_MS
       );
 
