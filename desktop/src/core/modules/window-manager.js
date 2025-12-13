@@ -85,6 +85,18 @@ export class WindowManager {
       this.mainWindow.loadFile(getRendererFilePath('index.html'));
     }
 
+    // 主窗口加载错误/渲染日志（生产环境排查白屏很关键）
+    this.mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+      console.error('[MainWindow] did-fail-load:', { errorCode, errorDescription, validatedURL });
+    });
+    this.mainWindow.webContents.on('render-process-gone', (_event, details) => {
+      console.error('[MainWindow] render-process-gone:', details);
+    });
+    this.mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+      const levelName = ['debug', 'info', 'warn', 'error'][level] || String(level);
+      console.log(`[Renderer:${levelName}] ${message} (${sourceId}:${line})`);
+    });
+
     // 窗口准备就绪后显示
     this.mainWindow.once('ready-to-show', () => {
       this.mainWindow.show();

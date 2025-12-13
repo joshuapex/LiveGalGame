@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { performance } from 'perf_hooks';
+import os from 'os';
 
 // 初始化 electron-audio-loopback（必须在 app.whenReady 之前调用）
 initAudioLoopback();
@@ -25,6 +26,82 @@ let ipcManager;
 let shortcutManager;
 let asrPreloader;
 let permissionManager;
+
+/**
+ * 初始化落盘日志（主进程 + 渲染进程 console 转发）
+ * - 写入位置: app.getPath('userData')/logs
+ * - 文件名: livegalgame-desktop_YYYYMMDD_HHMMSS.log
+ */
+function initFileLogging() {
+  try {
+    const userData = app.getPath('userData');
+    const logsDir = path.join(userData, 'logs');
+    fs.mkdirSync(logsDir, { recursive: true });
+
+    const pad2 = (n) => String(n).padStart(2, '0');
+    const now = new Date();
+    const ts = `${now.getFullYear()}${pad2(now.getMonth() + 1)}${pad2(now.getDate())}_${pad2(now.getHours())}${pad2(now.getMinutes())}${pad2(now.getSeconds())}`;
+    const logFile = path.join(logsDir, `livegalgame-desktop_${ts}.log`);
+    const stream = fs.createWriteStream(logFile, { flags: 'a' });
+
+    const writeLine = (level, args) => {
+      const time = new Date().toISOString();
+      const msg = args
+        .map((a) => {
+          if (a instanceof Error) return a.stack || a.message;
+          if (typeof a === 'string') return a;
+          try {
+            return JSON.stringify(a);
+          } catch {
+            return String(a);
+          }
+        })
+        .join(' ');
+      stream.write(`[${time}] [${level}] ${msg}${os.EOL}`);
+    };
+
+    const wrap = (level, original) => (...args) => {
+      try {
+        writeLine(level, args);
+      } catch {
+        // ignore file logging errors
+      }
+      try {
+        original(...args);
+      } catch {
+        // ignore console errors (e.g. EPIPE)
+      }
+    };
+
+    console.log = wrap('INFO', console.log);
+    console.info = wrap('INFO', console.info);
+    console.warn = wrap('WARN', console.warn);
+    console.error = wrap('ERROR', console.error);
+    console.debug = wrap('DEBUG', console.debug);
+
+    process.on('uncaughtException', (err) => {
+      console.error('[Process] uncaughtException', err);
+    });
+    process.on('unhandledRejection', (reason) => {
+      console.error('[Process] unhandledRejection', reason);
+    });
+
+    app.on('render-process-gone', (_event, webContents, details) => {
+      console.error('[Renderer] render-process-gone', { id: webContents?.id, ...details });
+    });
+    app.on('child-process-gone', (_event, details) => {
+      console.error('[Process] child-process-gone', details);
+    });
+
+    console.log('[Log] File logging enabled:', logFile);
+  } catch (error) {
+    try {
+      console.error('[Log] Failed to init file logging:', error);
+    } catch {
+      // ignore
+    }
+  }
+}
 
 /**
  * 启动阶段耗时记录工具
@@ -188,6 +265,8 @@ function cleanup() {
 // ========== 主应用入口 ==========
 
 app.whenReady().then(async () => {
+  // 需要在尽可能早的阶段初始化
+  initFileLogging();
   console.log('Starting LiveGalGame Desktop...');
 
   const endAppReadyPipeline = startTimer('app.whenReady pipeline');
