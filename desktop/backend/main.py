@@ -435,9 +435,12 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1].endswith(".py"):
         script_path = Path(sys.argv[1])
         # Security check: only allow running scripts from ASR_DIR
+        # NOTE: Path.is_relative_to was introduced in Python 3.9. PyInstaller builds may use older versions.
+        # Use Path.relative_to for broad compatibility.
         try:
-            is_relative = script_path.resolve().is_relative_to(ASR_DIR.resolve())
-        except ValueError:
+            script_path.resolve().relative_to(ASR_DIR.resolve())
+            is_relative = True
+        except Exception:
             is_relative = False
             
         if script_path.exists() and (is_relative or os.environ.get("ALLOW_ARBITRARY_SCRIPTS") == "1"):

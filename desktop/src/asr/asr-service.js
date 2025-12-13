@@ -62,6 +62,9 @@ class ASRService {
     this.audioStoragePath = defaultAudioStoragePath();
     ensureDir(this.audioStoragePath);
     this.isStopping = false; // 标记是否为预期的关闭，避免误报崩溃
+    // 防止并发 initialize/startBackendServer 造成重复拉起多个后端进程（导致内存飙升）
+    this._initializePromise = null;
+    this._startPromise = null;
   }
 
   setServerCrashCallback(callback) {
@@ -83,27 +86,49 @@ class ASRService {
   }
 
   async initialize(modelName = 'siliconflow-cloud', options = {}) {
-    this.modelName = modelName || this.modelName;
-    const preset = getAsrModelPreset(modelName);
-    this.modelPreset = preset;
-    this.engine = preset?.engine || 'funasr';
-    this.retainAudioFiles = options.retainAudioFiles || false;
-    this.audioStoragePath = options.audioStoragePath || this.audioStoragePath;
-    ensureDir(this.audioStoragePath);
-
-    // 确保服务器在预加载时就启动（不要懒加载）
-    if (!this.serverProcess) {
-      await this.startBackendServer();
-    } else if (!this.serverReady) {
-      // 如果进程存在但还没准备好，等待健康检查
-      await this.waitForHealth();
+    if (this._initializePromise) {
+      return await this._initializePromise;
     }
-    this.serverReady = true;
-    this.isInitialized = true;
-    return true;
+
+    this._initializePromise = (async () => {
+      this.modelName = modelName || this.modelName;
+      const preset = getAsrModelPreset(modelName);
+      this.modelPreset = preset;
+      this.engine = preset?.engine || 'funasr';
+      this.retainAudioFiles = options.retainAudioFiles || false;
+      this.audioStoragePath = options.audioStoragePath || this.audioStoragePath;
+      ensureDir(this.audioStoragePath);
+
+      // 确保服务器在预加载时就启动（不要懒加载）
+      if (!this.serverProcess) {
+        await this.startBackendServer();
+      } else if (!this.serverReady) {
+        // 如果进程存在但还没准备好，等待健康检查
+        await this.waitForHealth();
+      }
+      this.serverReady = true;
+      this.isInitialized = true;
+      return true;
+    })().finally(() => {
+      this._initializePromise = null;
+    });
+
+    return await this._initializePromise;
   }
 
   async startBackendServer() {
+    if (this._startPromise) {
+      return await this._startPromise;
+    }
+    // 若已有进程，则不要重复拉起；只需等它 ready
+    if (this.serverProcess) {
+      if (!this.serverReady) {
+        await this.waitForHealth();
+      }
+      return true;
+    }
+
+    this._startPromise = (async () => {
     // Pick a free port dynamically
     const port = await portfinder.getPortPromise({ port: Number(process.env.ASR_PORT) || 18000 });
     this.serverPort = port;
@@ -273,7 +298,34 @@ class ASRService {
       this.isDownloading = false;
     });
 
-    await this.waitForHealth();
+    try {
+      await this.waitForHealth();
+      return true;
+    } catch (err) {
+      // 启动失败时务必清理子进程，避免后台残留导致内存飙升
+      try {
+        this.isStopping = true;
+        if (this.serverProcess?.pid) {
+          try {
+            treeKill(this.serverProcess.pid);
+          } catch {
+            this.serverProcess.kill();
+          }
+        }
+      } catch {
+        // ignore
+      } finally {
+        this.serverProcess = null;
+        this.serverReady = false;
+        this.isStopping = false;
+      }
+      throw err;
+    }
+    })().finally(() => {
+      this._startPromise = null;
+    });
+
+    return await this._startPromise;
   }
 
   async waitForHealth(timeoutMs = 180000) { // 默认 3 分钟，会在有下载进展时自动延长

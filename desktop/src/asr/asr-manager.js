@@ -22,6 +22,8 @@ class ASRManager {
 
     // 服务器崩溃回调
     this.onServerCrash = null;
+    // 防止并发 initialize 导致重复拉起后端/worker（内存飙升）
+    this._initializePromise = null;
 
     // 当前对话 ID
     this.currentConversationId = null;
@@ -91,6 +93,11 @@ class ASRManager {
    * @param {string} conversationId - 对话 ID
    */
   async initialize(conversationId = null) {
+    if (this._initializePromise) {
+      return await this._initializePromise;
+    }
+
+    this._initializePromise = (async () => {
     try {
       logger.log('Initializing ASRManager...');
 
@@ -175,6 +182,11 @@ class ASRManager {
       logger.error('Error initializing ASRManager:', error);
       throw error;
     }
+    })().finally(() => {
+      this._initializePromise = null;
+    });
+
+    return await this._initializePromise;
   }
 
   /**
