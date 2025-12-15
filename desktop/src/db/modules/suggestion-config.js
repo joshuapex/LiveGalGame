@@ -80,7 +80,9 @@ export default function SuggestionConfigManager(BaseClass) {
         cooldown_seconds: 15,
         context_message_limit: 20,
         topic_detection_enabled: 0,
+        situation_llm_enabled: 0,
         model_name: 'gpt-4o-mini',
+        situation_model_name: 'gpt-4o-mini',
         thinking_enabled: 0,
         created_at: now,
         updated_at: now
