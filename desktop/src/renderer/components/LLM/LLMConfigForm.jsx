@@ -12,11 +12,14 @@ export const LLMConfigForm = ({
   onCancel,
   testingConfig,
   testConfigMessage,
-  testConfigError
+  testConfigError,
+  isEditing = false
 }) => {
   return (
     <div className="p-4 rounded-lg border-2 border-dashed border-primary bg-primary/5">
-      <h3 className="font-semibold text-text-light dark:text-text-dark mb-4">添加新配置</h3>
+      <h3 className="font-semibold text-text-light dark:text-text-dark mb-4">
+        {isEditing ? '编辑配置' : '添加新配置'}
+      </h3>
       <div className="space-y-4">
         <div>
           <label className="block text-sm font-medium text-text-light dark:text-text-dark mb-2">

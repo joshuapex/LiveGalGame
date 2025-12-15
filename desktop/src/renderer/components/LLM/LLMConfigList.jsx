@@ -8,6 +8,7 @@ export const LLMConfigList = ({
   configs,
   defaultConfig,
   onSetDefault,
+  onEdit,
   onDelete,
   loading
 }) => {
@@ -60,6 +61,12 @@ export const LLMConfigList = ({
                   设为默认
                 </button>
               )}
+              <button
+                onClick={() => onEdit(config)}
+                className="px-3 py-1 text-sm text-primary hover:bg-primary/10 rounded-lg transition-colors"
+              >
+                编辑
+              </button>
               <button
                 onClick={() => onDelete(config.id)}
                 className="px-3 py-1 text-sm text-red-500 hover:bg-red-500/10 rounded-lg transition-colors"

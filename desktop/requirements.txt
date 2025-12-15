@@ -13,4 +13,6 @@ onnxruntime==1.21.1
 
 # FunASR ONNX 运行时依赖（funasr_onnx 内部会 import）
 jieba>=0.42.1
+torch
+modelscope
 

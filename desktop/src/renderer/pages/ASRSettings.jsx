@@ -432,6 +432,20 @@ function ASRSettings() {
       const api = window.electronAPI;
       if (!api) throw new Error('electronAPI 不可用');
 
+      // 确保测试角色存在
+      try {
+        await api.createCharacter({
+          id: 'asr-test-character',
+          name: 'ASR 测试角色',
+          nickname: '测试',
+          affinity: 50,
+          created_at: Date.now(),
+          updated_at: Date.now()
+        });
+      } catch {
+        // 角色可能已存在，忽略错误
+      }
+
       // 创建一个临时对话，便于把识别结果保存/回显
       const conversation = await api.dbCreateConversation({
         id: 'asr-settings-test',

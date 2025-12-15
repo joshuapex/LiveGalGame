@@ -1,5 +1,12 @@
 import { formatBytes, formatSpeed, calculateProgress, isPresetActive, engineNames } from './asrSettingsUtils';
 
+// 过滤 ANSI 转义序列
+function stripAnsi(str) {
+  if (!str) return str;
+  // eslint-disable-next-line no-control-regex
+  return str.replace(/\x1b\[[0-9;]*[a-zA-Z]|\[A/g, '').trim();
+}
+
 export function ASRModelCard({
   preset,
   status = {},
@@ -20,7 +27,9 @@ export function ASRModelCard({
   const progressVisible = (totalBytes > 0 && (activeDownload || (downloadedBytes > 0 && !isDownloaded))) || (activeDownload && status.progressMessage);
   const engine = preset.engine || 'funasr';
   const canResume = !isDownloaded && downloadedBytes > 0 && !activeDownload;
-  const progressMessage = status.progressMessage;
+  const progressMessage = stripAnsi(status.progressMessage);
+  // 是否有进度条（有字节数据）
+  const hasProgressBar = totalBytes > 0 && percent > 0;
 
   return (
     <div
@@ -73,7 +82,7 @@ export function ASRModelCard({
           </div>
         ) : (
           <div className="text-gray-500">
-            {activeDownload ? (progressMessage || '正在下载模型...') : '尚未下载，点击下方按钮开始下载'}
+            {activeDownload ? '正在下载模型...' : '尚未下载，点击下方按钮开始下载'}
           </div>
         )}
       </div>

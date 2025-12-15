@@ -373,6 +373,14 @@ body {
   color: #5b21b6;
 }
 
+/* 换一批按钮容器 */
+.suggestions-refresh-container {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+  padding-right: 4px;
+}
+
 /* 角色选择器样式 */
 .character-grid {
   display: grid;

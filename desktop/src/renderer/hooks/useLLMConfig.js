@@ -9,6 +9,7 @@ export const useLLMConfig = () => {
   const [defaultConfig, setDefaultConfig] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showAddConfig, setShowAddConfig] = useState(false);
+  const [editingConfigId, setEditingConfigId] = useState(null); // 正在编辑的配置ID
   const [featureBindings, setFeatureBindings] = useState({});
   const [featureBindingLoading, setFeatureBindingLoading] = useState(false);
   const [featureBindingError, setFeatureBindingError] = useState('');
@@ -190,6 +191,7 @@ export const useLLMConfig = () => {
    */
   const handleCancelAdd = useCallback(() => {
     setShowAddConfig(false);
+    setEditingConfigId(null);
     setNewConfig({
       name: '',
       apiKey: '',
@@ -201,6 +203,81 @@ export const useLLMConfig = () => {
     setTestConfigError('');
     setTestingConfig(false);
   }, []);
+
+  /**
+   * 开始编辑配置
+   */
+  const handleEditConfig = useCallback((config) => {
+    setEditingConfigId(config.id);
+    setNewConfig({
+      name: config.name || '',
+      apiKey: config.api_key || '',
+      baseUrl: config.base_url || '',
+      modelName: config.model_name || 'gpt-4o-mini',
+      isDefault: config.is_default === 1
+    });
+    setShowAddConfig(true);
+    setTestConfigMessage('');
+    setTestConfigError('');
+  }, []);
+
+  /**
+   * 保存配置（新增或更新）
+   */
+  const handleSaveConfig = useCallback(async () => {
+    // 验证输入
+    if (!isNonEmptyString(newConfig.name)) {
+      alert('请填写配置名称');
+      return;
+    }
+    if (!isValidApiKey(newConfig.apiKey)) {
+      alert('请填写有效的API密钥');
+      return;
+    }
+    if (!isValidModelName(newConfig.modelName)) {
+      alert('请填写模型名称');
+      return;
+    }
+    if (!isValidBaseUrl(newConfig.baseUrl)) {
+      alert('请填写有效的Base URL');
+      return;
+    }
+
+    try {
+      if (window.electronAPI?.saveLLMConfig) {
+        const configData = {
+          id: editingConfigId || undefined, // 如果有 id 则为更新
+          name: newConfig.name,
+          api_key: newConfig.apiKey,
+          base_url: newConfig.baseUrl || null,
+          model_name: newConfig.modelName?.trim() || 'gpt-4o-mini',
+          is_default: newConfig.isDefault
+        };
+
+        await window.electronAPI.saveLLMConfig(configData);
+
+        // 重置表单
+        setNewConfig({
+          name: '',
+          apiKey: '',
+          baseUrl: '',
+          modelName: 'gpt-4o-mini',
+          isDefault: false
+        });
+        setTestConfigMessage('');
+        setTestConfigError('');
+        setTestingConfig(false);
+        setShowAddConfig(false);
+        setEditingConfigId(null);
+
+        // 重新加载配置列表
+        await loadConfigs();
+      }
+    } catch (error) {
+      console.error('保存配置失败:', error);
+      alert('保存配置失败，请重试');
+    }
+  }, [newConfig, editingConfigId, loadConfigs]);
 
   /**
    * 绑定/更新功能对应的 LLM 配置
@@ -231,6 +308,7 @@ export const useLLMConfig = () => {
     defaultConfig,
     loading,
     showAddConfig,
+    editingConfigId,
     featureBindings,
     featureBindingLoading,
     featureBindingError,
@@ -247,6 +325,8 @@ export const useLLMConfig = () => {
     loadConfigs,
     loadFeatureBindings,
     handleAddConfig,
+    handleSaveConfig,
+    handleEditConfig,
     handleTestLLMConfig,
     handleSetDefault,
     handleDeleteConfig,

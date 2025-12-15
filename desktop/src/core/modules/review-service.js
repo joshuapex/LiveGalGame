@@ -455,13 +455,26 @@ review_summary[1]{total_affinity_change,title,conversation_summary,self_evaluati
 
         console.log('[ReviewService] Sending prompt to LLM:', prompt);
 
-        const completion = await client.chat.completions.create({
-            model: this.currentLLMConfig.model_name,
-            messages: [{ role: 'user', content: prompt }],
-            temperature: 0.2, // 分析类任务降低随机性
-            max_tokens: 2000,
-            stream: false
-        });
+        let completion;
+        try {
+            completion = await client.chat.completions.create({
+                model: this.currentLLMConfig.model_name,
+                messages: [{ role: 'user', content: prompt }],
+                temperature: 0.2, // 分析类任务降低随机性
+                max_tokens: 2000,
+                stream: false
+            });
+        } catch (apiError) {
+            console.error('[ReviewService] LLM API 调用失败:', apiError);
+            throw new Error(`LLM API 调用失败: ${apiError.message || apiError}`);
+        }
+
+        console.log('[ReviewService] LLM API 响应:', JSON.stringify(completion, null, 2));
+
+        if (!completion || !completion.choices || !completion.choices[0]) {
+            console.error('[ReviewService] LLM 响应格式异常:', completion);
+            throw new Error('LLM 响应格式异常，请检查 API 配置');
+        }
 
         const content = completion.choices[0]?.message?.content;
         console.log('[ReviewService] LLM Response:', content);

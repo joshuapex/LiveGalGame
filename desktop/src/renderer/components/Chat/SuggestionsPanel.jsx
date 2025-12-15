@@ -47,16 +47,6 @@ export const SuggestionsPanel = ({
           >
             {suggestionStatus === 'loading' || isStreaming ? '生成中…' : '生成建议'}
           </button>
-          {suggestions.length > 0 && !isStreaming && suggestionStatus !== 'loading' && (
-            <button
-              className="suggestion-action-btn suggestion-refresh-btn"
-              onClick={() => onGenerate({ trigger: 'manual', reason: 'refresh' })}
-              disabled={suggestionStatus === 'loading' || suggestionStatus === 'streaming'}
-              title="生成一批不同的建议选项"
-            >
-              🔄 换一批
-            </button>
-          )}
         </div>
       </div>
       {suggestionError && (
@@ -128,6 +118,18 @@ export const SuggestionsPanel = ({
           </div>
         )}
       </div>
+      {suggestions.length > 0 && !isStreaming && suggestionStatus !== 'loading' && (
+        <div className="suggestions-refresh-container">
+          <button
+            className="suggestion-action-btn suggestion-refresh-btn"
+            onClick={() => onGenerate({ trigger: 'manual', reason: 'refresh' })}
+            disabled={suggestionStatus === 'loading' || suggestionStatus === 'streaming'}
+            title="生成一批不同的建议选项"
+          >
+            🔄 换一批
+          </button>
+        </div>
+      )}
     </section>
   );
 };

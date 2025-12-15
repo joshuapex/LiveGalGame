@@ -99,6 +99,7 @@ function Settings() {
                   defaultConfig={llmHook.defaultConfig}
                   loading={llmHook.loading}
                   onSetDefault={llmHook.handleSetDefault}
+                  onEdit={llmHook.handleEditConfig}
                   onDelete={llmHook.handleDeleteConfig}
                 />
 
@@ -106,12 +107,13 @@ function Settings() {
                   <LLMConfigForm
                     newConfig={llmHook.newConfig}
                     onChange={llmHook.setNewConfig}
-                    onSubmit={llmHook.handleAddConfig}
+                    onSubmit={llmHook.handleSaveConfig}
                     onTest={llmHook.handleTestLLMConfig}
                     onCancel={llmHook.handleCancelAdd}
                     testingConfig={llmHook.testingConfig}
                     testConfigMessage={llmHook.testConfigMessage}
                     testConfigError={llmHook.testConfigError}
+                    isEditing={!!llmHook.editingConfigId}
                   />
                 )}
               </>

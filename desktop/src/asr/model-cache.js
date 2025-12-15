@@ -91,6 +91,7 @@ function getModelCacheCandidates() {
     process.env.MODELSCOPE_CACHE,
     process.env.ASR_CACHE_DIR,
     process.env.HF_HOME ? path.join(process.env.HF_HOME, 'hub') : null,
+    path.join(userDataDir, 'asr-cache', 'modelscope', 'hub'),  // model-manager.js 下载位置
     path.join(userDataDir, 'hf-home', 'hub'),
     path.join(userDataDir, 'ms-cache'),
     homeDir ? path.join(homeDir, '.cache', 'huggingface', 'hub') : null,
