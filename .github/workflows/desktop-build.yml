@@ -4,7 +4,8 @@ on:
   push:
     branches: [ main, master, feat/desktop-branch ]
     tags:
-      - 'v*.*.*-*'
+      - 'v*.*.*-*'   # prerelease: v0.1.0-beta.1
+      - 'v[0-9]*.[0-9]*.[0-9]*'  # release: v0.1.0 (纯版本号)
     paths:
       - 'desktop/**'
       - '.github/workflows/desktop-build.yml'
@@ -130,12 +131,8 @@ jobs:
             --prerelease \
             --title "${GITHUB_REF_NAME}" \
             --notes "Prerelease ${GITHUB_REF_NAME}"
-          files=$(find dist -type f)
-          if [ -z "$files" ]; then
-            echo "No artifacts found under dist/"
-            exit 1
-          fi
-          gh release upload "${GITHUB_REF_NAME}" $files --clobber
+          # 处理带空格的文件名
+          find dist -type f -print0 | xargs -0 -I {} gh release upload "${GITHUB_REF_NAME}" "{}" --clobber
 
   release:
     name: Publish release
@@ -164,9 +161,5 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" \
             --title "${GITHUB_REF_NAME}" \
             --notes "Release ${GITHUB_REF_NAME}"
-          files=$(find dist -type f)
-          if [ -z "$files" ]; then
-            echo "No artifacts found under dist/"
-            exit 1
-          fi
-          gh release upload "${GITHUB_REF_NAME}" $files --clobber
+          # 处理带空格的文件名
+          find dist -type f -print0 | xargs -0 -I {} gh release upload "${GITHUB_REF_NAME}" "{}" --clobber
