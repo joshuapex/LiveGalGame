@@ -116,6 +116,37 @@ pnpm dev
 
 ---
 
+## 📦 桌面端发布规则（GitHub Actions）
+
+桌面端发布使用 tag 触发，并区分 **预发布** 和 **正式发布**：
+
+- **预发布（Prerelease）**：`vX.Y.Z-xxx`  
+  例：`v0.1.0-beta.1`
+- **正式发布（Release）**：`vX.Y.Z`  
+  例：`v0.1.0`
+
+Android 的发布已独立为 `android-v*` 标签，避免干扰桌面端发布。
+
+示例：
+
+```bash
+# 预发布（会生成 GitHub Prerelease）
+git tag v0.1.0-beta.1
+git push origin v0.1.0-beta.1
+
+# 正式发布（会生成 GitHub Release）
+git tag v0.1.0
+git push origin v0.1.0
+
+# Android 发布（仅 Android 流程触发）
+git tag android-v0.1.0
+git push origin android-v0.1.0
+```
+
+> 说明：桌面端产物为 macOS `.dmg` 与 Windows `.exe`，不会生成 APK。
+
+---
+
 ## 🧰 模型下载与缓存目录（HF / ModelScope）
 
 应用内的语音识别模型（尤其是 FunASR ONNX）会在首次使用/点击下载时自动拉取，并缓存到本机磁盘。为了方便管理、并兼容 Windows / macOS 的默认目录差异，项目默认把缓存放到 Electron 的 `userData` 目录下（不同系统会自动选择合适位置）。
