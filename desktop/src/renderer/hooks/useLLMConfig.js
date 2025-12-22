@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { isNonEmptyString, isValidApiKey, isValidBaseUrl, isValidModelName } from '../utils/validation.js';
+import { isNonEmptyString, isValidApiKey, isValidBaseUrl, isValidModelName, isValidTimeoutMs } from '../utils/validation.js';
 
 /**
  * LLM配置管理的自定义Hook
@@ -18,6 +18,7 @@ export const useLLMConfig = () => {
     apiKey: '',
     baseUrl: '',
     modelName: 'gpt-4o-mini',
+    timeoutMs: '',
     isDefault: false
   });
   const [testingConfig, setTestingConfig] = useState(false);
@@ -86,6 +87,10 @@ export const useLLMConfig = () => {
       alert('请填写有效的Base URL');
       return;
     }
+    if (!isValidTimeoutMs(newConfig.timeoutMs)) {
+      alert('请填写有效的超时时间（毫秒）');
+      return;
+    }
 
     try {
       if (window.electronAPI?.saveLLMConfig) {
@@ -94,6 +99,7 @@ export const useLLMConfig = () => {
           api_key: newConfig.apiKey,
           base_url: newConfig.baseUrl || null,
           model_name: newConfig.modelName?.trim() || 'gpt-4o-mini',
+          timeout_ms: newConfig.timeoutMs !== '' ? Number(newConfig.timeoutMs) : null,
           is_default: newConfig.isDefault
         };
 
@@ -105,6 +111,7 @@ export const useLLMConfig = () => {
           apiKey: '',
           baseUrl: '',
           modelName: 'gpt-4o-mini',
+          timeoutMs: '',
           isDefault: false
         });
         setTestConfigMessage('');
@@ -136,6 +143,11 @@ export const useLLMConfig = () => {
       setTestConfigMessage('');
       return;
     }
+    if (!isValidTimeoutMs(newConfig.timeoutMs)) {
+      setTestConfigError('请填写有效的超时时间（毫秒）');
+      setTestConfigMessage('');
+      return;
+    }
 
     setTestingConfig(true);
     setTestConfigError('');
@@ -145,14 +157,17 @@ export const useLLMConfig = () => {
       const result = await window.electronAPI.testLLMConnection({
         api_key: newConfig.apiKey,
         base_url: newConfig.baseUrl || null,
-        model_name: newConfig.modelName?.trim() || 'gpt-4o-mini'
+        model_name: newConfig.modelName?.trim() || 'gpt-4o-mini',
+        timeout_ms: newConfig.timeoutMs !== '' ? Number(newConfig.timeoutMs) : null
       });
 
       if (result?.success) {
-        setTestConfigMessage(result.message || '验证成功');
+        const statusText = result?.status ? `（HTTP ${result.status}）` : '';
+        setTestConfigMessage(`${result.message || '验证成功'}${statusText}`);
         setTestConfigError('');
       } else {
-        setTestConfigError(result?.message || '验证失败，请检查 API Key 和 Base URL');
+        const statusText = result?.status ? `（HTTP ${result.status}）` : '';
+        setTestConfigError(`${result?.message || '验证失败，请检查 API Key 和 Base URL'}${statusText}`);
         setTestConfigMessage('');
       }
     } catch (error) {
@@ -197,6 +212,7 @@ export const useLLMConfig = () => {
       apiKey: '',
       baseUrl: '',
       modelName: 'gpt-4o-mini',
+      timeoutMs: '',
       isDefault: false
     });
     setTestConfigMessage('');
@@ -214,6 +230,7 @@ export const useLLMConfig = () => {
       apiKey: config.api_key || '',
       baseUrl: config.base_url || '',
       modelName: config.model_name || 'gpt-4o-mini',
+      timeoutMs: config.timeout_ms ?? '',
       isDefault: config.is_default === 1
     });
     setShowAddConfig(true);
@@ -242,6 +259,10 @@ export const useLLMConfig = () => {
       alert('请填写有效的Base URL');
       return;
     }
+    if (!isValidTimeoutMs(newConfig.timeoutMs)) {
+      alert('请填写有效的超时时间（毫秒）');
+      return;
+    }
 
     try {
       if (window.electronAPI?.saveLLMConfig) {
@@ -251,6 +272,7 @@ export const useLLMConfig = () => {
           api_key: newConfig.apiKey,
           base_url: newConfig.baseUrl || null,
           model_name: newConfig.modelName?.trim() || 'gpt-4o-mini',
+          timeout_ms: newConfig.timeoutMs !== '' ? Number(newConfig.timeoutMs) : null,
           is_default: newConfig.isDefault
         };
 
@@ -262,6 +284,7 @@ export const useLLMConfig = () => {
           apiKey: '',
           baseUrl: '',
           modelName: 'gpt-4o-mini',
+          timeoutMs: '',
           isDefault: false
         });
         setTestConfigMessage('');

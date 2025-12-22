@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS llm_configs (
   api_key TEXT NOT NULL, -- API密钥
   base_url TEXT, -- API基础URL（可选，默认使用提供商的标准URL）
   model_name TEXT NOT NULL DEFAULT 'gpt-4o-mini', -- 模型名称
+  timeout_ms INTEGER, -- 请求超时（毫秒，可选）
   is_default INTEGER DEFAULT 0, -- 是否为默认配置
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL

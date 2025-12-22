@@ -32,6 +32,9 @@ export const LLMConfigForm = ({
             className="w-full px-3 py-2 border border-border-light dark:border-border-dark rounded-lg bg-surface-light dark:bg-surface-dark text-text-light dark:text-text-dark focus:outline-none focus:ring-2 focus:ring-primary/50"
             placeholder="例如：OpenAI GPT-4"
           />
+          <p className="text-xs text-text-muted-light dark:text-text-muted-dark mt-1">
+            仅用于显示和区分不同配置，可随意填写
+          </p>
         </div>
 
         <div>
@@ -56,10 +59,10 @@ export const LLMConfigForm = ({
             value={newConfig.modelName}
             onChange={(e) => onChange({ ...newConfig, modelName: e.target.value })}
             className="w-full px-3 py-2 border border-border-light dark:border-border-dark rounded-lg bg-surface-light dark:bg-surface-dark text-text-light dark:text-text-dark focus:outline-none focus:ring-2 focus:ring-primary/50"
-            placeholder="例如：gpt-4o-mini"
+            placeholder="例如：gpt-4o-mini, claude-3-5-sonnet-20241022"
           />
           <p className="text-xs text-text-muted-light dark:text-text-muted-dark mt-1">
-            留空将使用默认模型 gpt-4o-mini
+            请填写 API 服务商提供的 Model ID（如 gpt-4o、claude-3-5-sonnet-20241022），留空将使用 gpt-4o-mini
           </p>
         </div>
 
@@ -74,6 +77,24 @@ export const LLMConfigForm = ({
             className="w-full px-3 py-2 border border-border-light dark:border-border-dark rounded-lg bg-surface-light dark:bg-surface-dark text-text-light dark:text-text-dark focus:outline-none focus:ring-2 focus:ring-primary/50"
             placeholder="https://api.openai.com/v1"
           />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-text-light dark:text-text-dark mb-2">
+            请求超时（毫秒，可选）
+          </label>
+          <input
+            type="number"
+            min="1000"
+            step="1000"
+            value={newConfig.timeoutMs}
+            onChange={(e) => onChange({ ...newConfig, timeoutMs: e.target.value })}
+            className="w-full px-3 py-2 border border-border-light dark:border-border-dark rounded-lg bg-surface-light dark:bg-surface-dark text-text-light dark:text-text-dark focus:outline-none focus:ring-2 focus:ring-primary/50"
+            placeholder="15000"
+          />
+          <p className="text-xs text-text-muted-light dark:text-text-muted-dark mt-1">
+            留空使用默认超时，建议不低于 1000ms
+          </p>
         </div>
 
         <div className="flex items-center gap-3">

@@ -50,6 +50,7 @@ export const LLMConfigList = ({
               <div className="text-sm text-text-muted-light dark:text-text-muted-dark mt-1 space-y-1">
                 <p>模型：{config.model_name || '未配置'}</p>
                 {config.base_url ? <p>Base URL：{config.base_url}</p> : null}
+                {config.timeout_ms ? <p>超时：{config.timeout_ms} ms</p> : null}
               </div>
             </div>
             <div className="flex gap-2">

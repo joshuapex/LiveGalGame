@@ -1,3 +1,4 @@
+const DEFAULT_REVIEW_TIMEOUT_MS = 1000 * 20;
 
 export default class ReviewService {
     constructor(dbGetter) {
@@ -456,6 +457,11 @@ review_summary[1]{total_affinity_change,title,conversation_summary,self_evaluati
         console.log('[ReviewService] Sending prompt to LLM:', prompt);
 
         let completion;
+        const timeoutMs = this.resolveTimeoutMs(this.currentLLMConfig, DEFAULT_REVIEW_TIMEOUT_MS);
+        const controller = new AbortController();
+        const timer = setTimeout(() => {
+            controller.abort(new Error('LLM生成超时，请稍后重试'));
+        }, timeoutMs);
         try {
             completion = await client.chat.completions.create({
                 model: this.currentLLMConfig.model_name,
@@ -463,10 +469,12 @@ review_summary[1]{total_affinity_change,title,conversation_summary,self_evaluati
                 temperature: 0.2, // 分析类任务降低随机性
                 max_tokens: 2000,
                 stream: false
-            });
+            }, { signal: controller.signal });
         } catch (apiError) {
             console.error('[ReviewService] LLM API 调用失败:', apiError);
             throw new Error(`LLM API 调用失败: ${apiError.message || apiError}`);
+        } finally {
+            clearTimeout(timer);
         }
 
         console.log('[ReviewService] LLM API 响应:', JSON.stringify(completion, null, 2));
@@ -507,6 +515,15 @@ review_summary[1]{total_affinity_change,title,conversation_summary,self_evaluati
             result.push(current);
         }
         return result.map(s => s.trim().replace(/^["']|["']$/g, '')); // Trim and unquote
+    }
+
+    resolveTimeoutMs(config, fallback) {
+        const raw = config?.timeout_ms;
+        const parsed = Number(raw);
+        if (Number.isFinite(parsed) && parsed > 0) {
+            return Math.round(parsed);
+        }
+        return fallback;
     }
 
     parseReviewToon(text, originalNodes) {

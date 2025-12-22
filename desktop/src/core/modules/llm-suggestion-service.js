@@ -63,6 +63,15 @@ export default class LLMSuggestionService {
     return Math.min(MAX_SUGGESTION_COUNT, Math.max(MIN_SUGGESTION_COUNT, Math.round(num)));
   }
 
+  resolveTimeoutMs(config, fallback) {
+    const raw = config?.timeout_ms;
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return Math.round(parsed);
+    }
+    return fallback;
+  }
+
   async generateSuggestions(payload = {}) {
     const collected = [];
     let metadata = null;
@@ -155,10 +164,11 @@ export default class LLMSuggestionService {
 
     const abortController = new AbortController();
     // 增加超时时间，避免在上下文较长或网络波动时误触发超时
+    const streamTimeoutMs = this.resolveTimeoutMs(this.currentLLMConfig, STREAM_TIMEOUT_MS * 2);
     const timeoutId = setTimeout(() => {
-      console.error('[LLMSuggestionService] Stream timed out after', STREAM_TIMEOUT_MS * 2, 'ms');
+      console.error('[LLMSuggestionService] Stream timed out after', streamTimeoutMs, 'ms');
       abortController.abort(new Error('LLM生成超时，请稍后重试'));
-    }, STREAM_TIMEOUT_MS * 2);
+    }, streamTimeoutMs);
 
     let usageInfo = null;
     let emittedCount = 0;
@@ -807,9 +817,10 @@ export default class LLMSuggestionService {
     };
 
     try {
+      const timeoutMs = this.resolveTimeoutMs(this.currentLLMConfig, DEFAULT_SITUATION_TIMEOUT_MS);
       const stream = await this.runWithTimeout(
         client.chat.completions.create(requestParams, { signal: controller.signal }),
-        DEFAULT_SITUATION_TIMEOUT_MS
+        timeoutMs
       );
 
       return await new Promise((resolve, reject) => {
