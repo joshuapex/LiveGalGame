@@ -92,11 +92,8 @@ export const useSuggestions = (sessionInfo) => {
     activeStreamRef.current = { id: null, trigger: null, reason: null };
   }, []);
 
-  const logStreamCharacters = useCallback((label, text) => {
-    if (!text) return;
-    for (let index = 0; index < text.length; index += 1) {
-      console.log(`[useSuggestions] ${label} char #${index}: "${text[index]}"`);
-    }
+  const logStreamCharacters = useCallback(() => {
+    // Disabled: per-character logging is extremely noisy and can stall the renderer.
   }, []);
 
   const startSuggestionStream = useCallback(

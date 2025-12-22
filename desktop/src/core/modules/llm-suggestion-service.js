@@ -454,7 +454,9 @@ export default class LLMSuggestionService {
       `<角色档案>${context.characterProfile}`,
       `<好感阶段策略>${affinityStageText}`,
       '<对话历史>',
-      `${context.historyText.join('\n')}`,
+      Array.isArray(context.historyText)
+        ? context.historyText.join('\n')
+        : (context.historyText || ''),
       `<情感分析>${emotionText}`,
       ...(previousSuggestionText ? [previousSuggestionText] : []),
       '',
