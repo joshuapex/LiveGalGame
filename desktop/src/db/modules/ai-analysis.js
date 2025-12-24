@@ -35,6 +35,8 @@ export default function AIAnalysisManager(BaseClass) {
         const hasDecisionPointId = names.includes('decision_point_id');
         const hasBatchId = names.includes('batch_id');
         const hasSuggestionIndex = names.includes('suggestion_index');
+        const hasIsSelected = names.includes('is_selected');
+        const hasSelectedAt = names.includes('selected_at');
 
         const needsRebuild =
           hasIsUsed || !hasDecisionPointId || !hasBatchId || !hasSuggestionIndex;
@@ -55,6 +57,8 @@ export default function AIAnalysisManager(BaseClass) {
                 content TEXT NOT NULL,
                 affinity_prediction INTEGER,
                 tags TEXT,
+                is_selected INTEGER DEFAULT 0,
+                selected_at INTEGER,
                 created_at INTEGER NOT NULL,
                 FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
                 FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
@@ -65,22 +69,28 @@ export default function AIAnalysisManager(BaseClass) {
             const backupNames = backupColumns.map((c) => c.name);
             const hasAffinity = backupNames.includes('affinity_prediction');
             const hasTags = backupNames.includes('tags');
+            const hasSelected = backupNames.includes('is_selected');
+            const hasSelectedAt = backupNames.includes('selected_at');
 
             // 旧表没有 suggestion_index / decision_point_id / batch_id，统一置 NULL
             const affinitySelect = hasAffinity ? 'affinity_prediction' : 'NULL';
             const tagsSelect = hasTags ? 'tags' : "''";
+            const selectedSelect = hasSelected ? 'is_selected' : '0';
+            const selectedAtSelect = hasSelectedAt ? 'selected_at' : 'NULL';
 
             this.db
               .prepare(`
                 INSERT INTO ai_suggestions (
                   id, conversation_id, message_id,
                   decision_point_id, batch_id, suggestion_index,
-                  title, content, affinity_prediction, tags, created_at
+                  title, content, affinity_prediction, tags,
+                  is_selected, selected_at,
+                  created_at
                 )
                 SELECT
                   id, conversation_id, message_id,
                   NULL, NULL, NULL,
-                  title, content, ${affinitySelect}, ${tagsSelect}, created_at
+                  title, content, ${affinitySelect}, ${tagsSelect}, ${selectedSelect}, ${selectedAtSelect}, created_at
                 FROM ai_suggestions_backup
               `)
               .run();
@@ -97,6 +107,14 @@ export default function AIAnalysisManager(BaseClass) {
           // 仅补齐索引
           this.db.prepare('CREATE INDEX IF NOT EXISTS idx_ai_suggestions_decision_point_id ON ai_suggestions(decision_point_id)').run();
           this.db.prepare('CREATE INDEX IF NOT EXISTS idx_ai_suggestions_batch_id ON ai_suggestions(batch_id)').run();
+
+          // 新增字段（向前兼容）
+          if (!hasIsSelected) {
+            this.db.prepare('ALTER TABLE ai_suggestions ADD COLUMN is_selected INTEGER DEFAULT 0').run();
+          }
+          if (!hasSelectedAt) {
+            this.db.prepare('ALTER TABLE ai_suggestions ADD COLUMN selected_at INTEGER').run();
+          }
         }
       }
 
@@ -282,6 +300,53 @@ export default function AIAnalysisManager(BaseClass) {
     } catch (error) {
       console.error('Error saving action suggestion:', error);
       return null;
+    }
+  }
+
+  /**
+   * 用户显式确认“采用了哪个建议”
+   * - 默认按 batch_id 互斥（同一批次只能选一个）
+   * - 如果没有 batch_id，则回退按 decision_point_id 互斥
+   */
+  selectActionSuggestion({ suggestionId, selected = true, selectedAt = null } = {}) {
+    try {
+      this.ensureSuggestionDecisionSchema();
+      if (!suggestionId) throw new Error('suggestionId is required');
+
+      const row = this.db
+        .prepare('SELECT id, batch_id, decision_point_id FROM ai_suggestions WHERE id = ? LIMIT 1')
+        .get(suggestionId);
+      if (!row) {
+        throw new Error(`Suggestion not found: ${suggestionId}`);
+      }
+
+      const ts = selectedAt || Date.now();
+      const scope = row.batch_id || row.decision_point_id || null;
+      const scopeField = row.batch_id ? 'batch_id' : (row.decision_point_id ? 'decision_point_id' : null);
+
+      const tx = this.db.transaction(() => {
+        if (scopeField && scope) {
+          // 互斥：同一 scope 先全部清空
+          this.db
+            .prepare(`UPDATE ai_suggestions SET is_selected = 0, selected_at = NULL WHERE ${scopeField} = ?`)
+            .run(scope);
+        } else {
+          // 无 scope：至少确保当前项能被正确更新
+          this.db.prepare('UPDATE ai_suggestions SET is_selected = 0, selected_at = NULL WHERE id = ?').run(suggestionId);
+        }
+
+        if (selected) {
+          this.db
+            .prepare('UPDATE ai_suggestions SET is_selected = 1, selected_at = ? WHERE id = ?')
+            .run(ts, suggestionId);
+        }
+      });
+
+      tx();
+      return true;
+    } catch (error) {
+      console.error('[DB] selectActionSuggestion failed:', error);
+      return false;
     }
   }
 

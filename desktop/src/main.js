@@ -5,6 +5,8 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { performance } from 'perf_hooks';
 import os from 'os';
+import { getAsrCacheBaseSetting } from './core/app-settings.js';
+import { applyAsrCacheEnv } from './asr/asr-cache-env.js';
 
 // 初始化 electron-audio-loopback（必须在 app.whenReady 之前调用）
 initAudioLoopback();
@@ -139,14 +141,8 @@ function attachMainWindowPerf(mainWindow) {
 function ensureAsrCacheEnv() {
   try {
     const userData = app.getPath('userData');
-    if (!process.env.HF_HOME) {
-      process.env.HF_HOME = path.join(userData, 'hf-home');
-    }
-    fs.mkdirSync(process.env.HF_HOME, { recursive: true });
-    if (!process.env.ASR_CACHE_DIR) {
-      process.env.ASR_CACHE_DIR = path.join(process.env.HF_HOME, 'hub');
-    }
-    fs.mkdirSync(process.env.ASR_CACHE_DIR, { recursive: true });
+    const persistedBase = process.env.ASR_CACHE_BASE ? null : getAsrCacheBaseSetting();
+    applyAsrCacheEnv({ userDataDir: userData, asrCacheBase: process.env.ASR_CACHE_BASE || persistedBase });
   } catch (error) {
     console.error('[ASR] Failed to ensure cache directories:', error);
   }

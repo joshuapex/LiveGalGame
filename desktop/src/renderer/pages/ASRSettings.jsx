@@ -30,6 +30,13 @@ function ASRSettings() {
   const [savingModelId, setSavingModelId] = useState(null);
   const [downloadSource, setDownloadSource] = useState('huggingface');
 
+  // 模型缓存目录（HF / ModelScope）
+  const [cacheInfo, setCacheInfo] = useState(null);
+  const [cacheLoading, setCacheLoading] = useState(true);
+  const [cacheSaving, setCacheSaving] = useState(false);
+  const [cacheError, setCacheError] = useState('');
+  const [cacheNotice, setCacheNotice] = useState('');
+
   // 按引擎分组模型
   const modelsByEngine = modelPresets.reduce((acc, preset) => {
     const engine = preset.engine || 'funasr';
@@ -55,6 +62,7 @@ function ASRSettings() {
   useEffect(() => {
     loadASRConfigs();
     loadModelData();
+    loadCacheInfo();
 
     const api = window.electronAPI;
     if (!api) {
@@ -180,6 +188,77 @@ function ASRSettings() {
       });
     };
   }, []);
+
+  const loadCacheInfo = async () => {
+    const api = window.electronAPI;
+    if (!api?.appGetModelCachePaths) {
+      setCacheLoading(false);
+      return;
+    }
+    setCacheLoading(true);
+    setCacheError('');
+    try {
+      const res = await api.appGetModelCachePaths();
+      if (!res?.ok) {
+        throw new Error(res?.message || '获取缓存目录失败');
+      }
+      setCacheInfo(res);
+    } catch (error) {
+      setCacheError(error?.message || String(error));
+    } finally {
+      setCacheLoading(false);
+    }
+  };
+
+  const handlePickCacheDir = async () => {
+    const api = window.electronAPI;
+    if (!api?.appSelectDirectory || !api?.appSetAsrCacheBase) {
+      setCacheError('当前版本不支持通过 GUI 配置缓存目录');
+      return;
+    }
+    setCacheNotice('');
+    setCacheError('');
+    try {
+      const selected = await api.appSelectDirectory({ title: '选择模型缓存目录（HF / ModelScope）' });
+      if (selected?.canceled || !selected?.path) {
+        return;
+      }
+      setCacheSaving(true);
+      const res = await api.appSetAsrCacheBase(selected.path);
+      if (!res?.ok) {
+        throw new Error(res?.message || '保存缓存目录失败');
+      }
+      setCacheNotice('已保存：ASR 将自动重载以应用新缓存目录（可能需要 10-30 秒）。');
+      await loadCacheInfo();
+    } catch (error) {
+      setCacheError(error?.message || String(error));
+    } finally {
+      setCacheSaving(false);
+    }
+  };
+
+  const handleResetCacheDir = async () => {
+    const api = window.electronAPI;
+    if (!api?.appSetAsrCacheBase) {
+      setCacheError('当前版本不支持通过 GUI 配置缓存目录');
+      return;
+    }
+    setCacheNotice('');
+    setCacheError('');
+    try {
+      setCacheSaving(true);
+      const res = await api.appSetAsrCacheBase(null);
+      if (!res?.ok) {
+        throw new Error(res?.message || '重置缓存目录失败');
+      }
+      setCacheNotice('已重置为默认目录：ASR 将自动重载以应用变更。');
+      await loadCacheInfo();
+    } catch (error) {
+      setCacheError(error?.message || String(error));
+    } finally {
+      setCacheSaving(false);
+    }
+  };
 
   const loadModelData = async () => {
     try {
@@ -534,6 +613,85 @@ function ASRSettings() {
             <span className="material-symbols-outlined text-sm">arrow_back</span>
             返回设置
           </Link>
+        </div>
+      </div>
+
+      {/* 模型缓存目录 */}
+      <div className="mb-8">
+        <div className="rounded-2xl border border-gray-200 bg-white p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-semibold text-gray-900">模型缓存目录</h2>
+              <p className="text-sm text-gray-600 mt-1">
+                管理 FunASR / HuggingFace / ModelScope 的模型下载位置，方便跨平台统一与迁移。
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handlePickCacheDir}
+                disabled={cacheSaving}
+                className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-300"
+              >
+                {cacheSaving ? '保存中…' : '选择目录…'}
+              </button>
+              <button
+                onClick={handleResetCacheDir}
+                disabled={cacheSaving}
+                className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:text-gray-400"
+              >
+                重置默认
+              </button>
+              <button
+                onClick={loadCacheInfo}
+                disabled={cacheSaving}
+                className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:text-gray-400"
+              >
+                刷新
+              </button>
+            </div>
+          </div>
+
+          {cacheNotice && (
+            <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
+              {cacheNotice}
+            </div>
+          )}
+          {cacheError && (
+            <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+              {cacheError}
+            </div>
+          )}
+
+          {cacheLoading ? (
+            <div className="mt-4 text-sm text-gray-600">正在读取缓存目录…</div>
+          ) : cacheInfo?.computed ? (
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                <div className="text-xs font-semibold text-gray-700">ASR 缓存根目录（ASR_CACHE_BASE）</div>
+                <div className="mt-1 break-all font-mono text-xs text-gray-800">{cacheInfo.computed.asrCacheBase}</div>
+              </div>
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                <div className="text-xs font-semibold text-gray-700">HuggingFace 缓存（HF_HOME / hub）</div>
+                <div className="mt-1 break-all font-mono text-xs text-gray-800">{cacheInfo.computed.hfHome}</div>
+                <div className="mt-1 break-all font-mono text-xs text-gray-600">{cacheInfo.computed.asrCacheDir}</div>
+              </div>
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 md:col-span-2">
+                <div className="text-xs font-semibold text-gray-700">ModelScope 缓存（MODELSCOPE_CACHE / hub）</div>
+                <div className="mt-1 break-all font-mono text-xs text-gray-800">{cacheInfo.computed.modelscopeCacheBase}</div>
+                <div className="mt-1 break-all font-mono text-xs text-gray-600">{cacheInfo.computed.modelscopeCacheHub}</div>
+              </div>
+              {cacheInfo?.persistedAsrCacheBase && (
+                <div className="rounded-lg border border-gray-200 bg-white p-3 md:col-span-2">
+                  <div className="text-xs font-semibold text-gray-700">已保存的自定义目录</div>
+                  <div className="mt-1 break-all font-mono text-xs text-gray-800">{cacheInfo.persistedAsrCacheBase}</div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="mt-4 text-sm text-gray-600">
+              当前未能读取缓存目录信息（可能是旧版本主进程未实现对应 IPC）。
+            </div>
+          )}
         </div>
       </div>
 

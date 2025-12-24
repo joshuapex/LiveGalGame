@@ -4,7 +4,7 @@ on:
   push:
     branches: [ main, master ]
     tags:
-      - 'v*'
+      - 'android-v*'
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:

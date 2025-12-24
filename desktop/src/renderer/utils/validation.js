@@ -54,3 +54,14 @@ export const isValidBaseUrl = (url) => {
 export const isValidModelName = (modelName) => {
   return isNonEmptyString(modelName) && modelName.trim().length > 0;
 };
+
+/**
+ * 验证超时时间（毫秒）
+ * @param {number|string|null|undefined} value - 超时时间
+ * @returns {boolean}
+ */
+export const isValidTimeoutMs = (value) => {
+  if (value === '' || value === null || value === undefined) return true;
+  const num = Number(value);
+  return Number.isFinite(num) && num > 0;
+};

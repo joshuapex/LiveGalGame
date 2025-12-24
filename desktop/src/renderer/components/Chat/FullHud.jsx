@@ -105,6 +105,9 @@ export const FullHud = ({
                     copiedSuggestionId={suggestions.copiedSuggestionId}
                     onGenerate={suggestions.handleGenerateSuggestions}
                     onCopy={suggestions.handleCopySuggestion}
+                    onSelectSuggestion={suggestions.handleSelectSuggestion}
+                    suggestionConfig={suggestions.suggestionConfig}
+                    onTogglePassive={(enabled) => suggestions.updateSuggestionConfig({ enable_passive_suggestion: enabled ? 1 : 0 })}
                     sessionInfo={chatSession.sessionInfo}
                 />
             </div>

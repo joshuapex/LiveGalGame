@@ -26,6 +26,7 @@ export default function LLMConfigManager(BaseClass) {
             api_key = @api_key,
             base_url = @base_url,
             model_name = @model_name,
+            timeout_ms = @timeout_ms,
             is_default = @is_default,
             updated_at = @updated_at
         WHERE id = @id
@@ -40,6 +41,9 @@ export default function LLMConfigManager(BaseClass) {
             configData.model_name ?? configData.modelName,
             existing.model_name || 'gpt-4o-mini'
           ),
+          timeout_ms: configData.timeout_ms !== undefined
+            ? this.normalizeTimeoutMs(configData.timeout_ms, null)
+            : existing.timeout_ms,
           is_default: configData.is_default !== undefined ? (configData.is_default ? 1 : 0) : existing.is_default,
           updated_at: now
         });
@@ -48,8 +52,8 @@ export default function LLMConfigManager(BaseClass) {
       }
 
       const insertStmt = this.db.prepare(`
-        INSERT INTO llm_configs (id, name, api_key, base_url, model_name, is_default, created_at, updated_at)
-        VALUES (@id, @name, @api_key, @base_url, @model_name, @is_default, @created_at, @updated_at)
+        INSERT INTO llm_configs (id, name, api_key, base_url, model_name, timeout_ms, is_default, created_at, updated_at)
+        VALUES (@id, @name, @api_key, @base_url, @model_name, @timeout_ms, @is_default, @created_at, @updated_at)
       `);
 
       const id = configData.id || this.generateId();
@@ -59,6 +63,7 @@ export default function LLMConfigManager(BaseClass) {
         api_key: configData.api_key,
         base_url: configData.base_url || null,
         model_name: this.normalizeModelName(configData.model_name ?? configData.modelName),
+        timeout_ms: this.normalizeTimeoutMs(configData.timeout_ms, null),
         is_default: configData.is_default ? 1 : 0,
         created_at: now,
         updated_at: now
@@ -204,6 +209,7 @@ export default function LLMConfigManager(BaseClass) {
       this.ensureLLMSchema();
       let requestParams;
       let clientConfig;
+      let timeoutMs;
 
       try {
         const { default: OpenAI } = await import('openai');
@@ -214,6 +220,7 @@ export default function LLMConfigManager(BaseClass) {
         }
 
         const client = new OpenAI(clientConfig);
+        timeoutMs = this.normalizeTimeoutMs(configData.timeout_ms, null);
         requestParams = {
           model: configData.model_name || 'gpt-4o-mini',
           messages: [{ role: 'user', content: 'test' }],
@@ -225,19 +232,32 @@ export default function LLMConfigManager(BaseClass) {
           configData: {
             name: configData.name,
             base_url: configData.base_url,
-            model_name: configData.model_name
+            model_name: configData.model_name,
+            timeout_ms: timeoutMs
           },
           requestParams,
           clientConfig
         });
 
-        const testResponse = await client.chat.completions.create(requestParams);
-
-        if (testResponse && testResponse.choices && testResponse.choices.length > 0) {
-          return { success: true, message: '连接成功' };
+        const controller = timeoutMs ? new AbortController() : null;
+        const timer = controller
+          ? setTimeout(() => controller.abort(new Error('LLM连接超时，请稍后再试')), timeoutMs)
+          : null;
+        let testResponse;
+        try {
+          testResponse = await client.chat.completions.create(
+            requestParams,
+            controller ? { signal: controller.signal } : undefined
+          );
+        } finally {
+          if (timer) clearTimeout(timer);
         }
 
-        return { success: false, message: 'API响应格式异常' };
+        if (testResponse && testResponse.choices && testResponse.choices.length > 0) {
+          return { success: true, message: '连接成功', status: 200 };
+        }
+
+        return { success: false, message: 'API响应格式异常', status: testResponse?.status || null };
       } catch (error) {
         console.error('LLM Connection Test Failed - Full Debug Info:', {
           error: {
@@ -252,7 +272,8 @@ export default function LLMConfigManager(BaseClass) {
           configData: {
             name: configData.name,
             base_url: configData.base_url,
-            model_name: configData.model_name
+            model_name: configData.model_name,
+            timeout_ms: timeoutMs
           },
           requestParams: requestParams || null,
           clientConfig: clientConfig || null
@@ -267,11 +288,13 @@ export default function LLMConfigManager(BaseClass) {
           errorMessage = 'API端点不存在或模型不可用';
         } else if (error.status === 429) {
           errorMessage = '请求频率过高，请稍后再试';
+        } else if (error.name === 'AbortError' || /timeout/i.test(error.message || '')) {
+          errorMessage = '请求超时，请稍后再试';
         } else if (error.message) {
           errorMessage = error.message;
         }
 
-        return { success: false, message: errorMessage, error: error.message };
+        return { success: false, message: errorMessage, status: error.status || null, error: error.message };
       }
     }
 
@@ -301,6 +324,17 @@ export default function LLMConfigManager(BaseClass) {
       return trimmed.replace(/\/+$/, '');
     }
 
+    normalizeTimeoutMs(value, fallback = null) {
+      if (value === null || value === undefined || value === '') {
+        return fallback;
+      }
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        return fallback;
+      }
+      return Math.round(parsed);
+    }
+
     ensureLLMSchema() {
       if (this._llmSchemaEnsured) {
         this.ensureLLMFeatureSchema();
@@ -317,6 +351,7 @@ export default function LLMConfigManager(BaseClass) {
       const columnNames = columns.map((column) => column.name);
       const hasProvider = columnNames.includes('provider');
       const hasModel = columnNames.includes('model_name');
+      const hasTimeout = columnNames.includes('timeout_ms');
 
       if (hasProvider) {
         this.rebuildLLMConfigTable(columns);
@@ -327,6 +362,9 @@ export default function LLMConfigManager(BaseClass) {
             "UPDATE llm_configs SET model_name = 'gpt-4o-mini' WHERE model_name IS NULL OR TRIM(model_name) = ''"
           )
           .run();
+      }
+      if (!hasTimeout) {
+        this.db.prepare('ALTER TABLE llm_configs ADD COLUMN timeout_ms INTEGER').run();
       }
 
       this.ensureLLMFeatureSchema();
@@ -360,6 +398,7 @@ export default function LLMConfigManager(BaseClass) {
             api_key TEXT NOT NULL,
             base_url TEXT,
             model_name TEXT NOT NULL DEFAULT 'gpt-4o-mini',
+            timeout_ms INTEGER,
             is_default INTEGER DEFAULT 0,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
@@ -368,15 +407,18 @@ export default function LLMConfigManager(BaseClass) {
 
         const hasModel = existingColumns.some((column) => column.name === 'model_name');
         const modelExpression = hasModel ? "COALESCE(model_name, 'gpt-4o-mini')" : "'gpt-4o-mini'";
+        const hasTimeout = existingColumns.some((column) => column.name === 'timeout_ms');
+        const timeoutExpression = hasTimeout ? 'timeout_ms' : 'NULL';
 
         this.db.prepare(`
-          INSERT INTO llm_configs (id, name, api_key, base_url, model_name, is_default, created_at, updated_at)
+          INSERT INTO llm_configs (id, name, api_key, base_url, model_name, timeout_ms, is_default, created_at, updated_at)
           SELECT
             id,
             name,
             api_key,
             base_url,
             ${modelExpression},
+            ${timeoutExpression},
             is_default,
             created_at,
             updated_at

@@ -39,15 +39,38 @@ def main():
 
     # 设置环境变量
     # FunASR 默认下载到 ~/.cache/modelscope/hub
-    # 如果指定了 cache-dir，我们尝试通过 MODELSCOPE_CACHE 环境变量来控制
+    # MODELSCOPE_CACHE 语义通常是 "base dir"，实际下载会落到 <base>/hub。
+    # 但历史上我们也可能传入了 ".../hub"。这里做兼容归一化，确保 Win/mac/Linux 都稳定落盘。
+    cache_base = None
+    cache_hub = None
     if args.cache_dir:
-        os.environ["MODELSCOPE_CACHE"] = args.cache_dir
-        os.environ["MODELSCOPE_CACHE_HOME"] = args.cache_dir
+        raw = os.path.abspath(args.cache_dir)
+        if os.path.basename(raw).lower() == "hub":
+            cache_base = os.path.dirname(raw)
+            cache_hub = raw
+        else:
+            cache_base = raw
+            cache_hub = os.path.join(raw, "hub")
     else:
-        cache = os.environ.get("ASR_CACHE_DIR")
+        # 兼容旧逻辑：若仅提供 ASR_CACHE_DIR（通常是 HF 的 hub），尝试回退到其父目录作为 base
+        cache = os.environ.get("MODELSCOPE_CACHE") or os.environ.get("MODELSCOPE_CACHE_HOME") or os.environ.get("ASR_CACHE_DIR")
         if cache:
-             os.environ["MODELSCOPE_CACHE"] = cache
-             os.environ["MODELSCOPE_CACHE_HOME"] = cache
+            raw = os.path.abspath(cache)
+            if os.path.basename(raw).lower() == "hub":
+                cache_base = os.path.dirname(raw)
+                cache_hub = raw
+            else:
+                cache_base = raw
+                cache_hub = os.path.join(raw, "hub")
+
+    if cache_base:
+        os.environ["MODELSCOPE_CACHE"] = cache_base
+        os.environ["MODELSCOPE_CACHE_HOME"] = cache_base
+        try:
+            os.makedirs(cache_base, exist_ok=True)
+            os.makedirs(cache_hub, exist_ok=True)
+        except Exception:
+            pass
 
     emit("manifest", modelId=args.model_id, message="准备下载 FunASR 模型...", totalBytes=0, fileCount=0)
 
@@ -98,7 +121,14 @@ def main():
         emit("manifest", modelId=args.model_id, message=f"正在下载标点模型: {punc_model_dir} (4/4)")
         CT_Transformer(model_dir=punc_model_dir, quantize=use_quantize, intra_op_num_threads=1)
 
-        emit("completed", modelId=args.model_id, message="FunASR 模型下载完成", localDir=os.environ.get("MODELSCOPE_CACHE"))
+        emit(
+            "completed",
+            modelId=args.model_id,
+            message="FunASR 模型下载完成",
+            localDir=cache_hub or os.environ.get("MODELSCOPE_CACHE") or "",
+            cacheBase=os.environ.get("MODELSCOPE_CACHE") or "",
+            cacheHub=cache_hub or "",
+        )
         
     except Exception as e:
         emit("error", modelId=args.model_id, message=str(e), traceback=traceback.format_exc())
@@ -106,4 +136,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

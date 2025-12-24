@@ -74,6 +74,24 @@ export const useSuggestions = (sessionInfo) => {
     }
   }, []);
 
+  const updateSuggestionConfig = useCallback(async (updates = {}) => {
+    try {
+      if (!window.electronAPI?.updateSuggestionConfig) {
+        console.warn('[useSuggestions] updateSuggestionConfig API not available');
+        return null;
+      }
+      await window.electronAPI.updateSuggestionConfig(updates);
+      // 通知同进程/其他窗口刷新配置（HUD 会监听此事件）
+      window.electronAPI?.send?.('suggestion-config-updated');
+      // 本地也立即刷新一次，避免等待事件丢失
+      await loadSuggestionConfig();
+      return true;
+    } catch (err) {
+      console.error('[useSuggestions] Failed to update suggestion config:', err);
+      return null;
+    }
+  }, [loadSuggestionConfig]);
+
   /**
    * 检查是否可以触发被动建议
    */
@@ -92,11 +110,8 @@ export const useSuggestions = (sessionInfo) => {
     activeStreamRef.current = { id: null, trigger: null, reason: null };
   }, []);
 
-  const logStreamCharacters = useCallback((label, text) => {
-    if (!text) return;
-    for (let index = 0; index < text.length; index += 1) {
-      console.log(`[useSuggestions] ${label} char #${index}: "${text[index]}"`);
-    }
+  const logStreamCharacters = useCallback(() => {
+    // Disabled: per-character logging is extremely noisy and can stall the renderer.
   }, []);
 
   const startSuggestionStream = useCallback(
@@ -243,6 +258,47 @@ export const useSuggestions = (sessionInfo) => {
       }, 1500);
     } catch (err) {
       console.error('复制建议失败：', err);
+    }
+  }, []);
+
+  /**
+   * 显式确认“采用了哪个建议”（写入 DB，并在当前 UI 内高亮）
+   */
+  const handleSelectSuggestion = useCallback(async (suggestion, selected = true) => {
+    try {
+      if (!suggestion?.id) return false;
+      if (!window.electronAPI?.selectActionSuggestion) {
+        console.warn('[useSuggestions] selectActionSuggestion API not available');
+        return false;
+      }
+
+      const ok = await window.electronAPI.selectActionSuggestion({
+        suggestionId: suggestion.id,
+        selected: Boolean(selected),
+        selectedAt: Date.now()
+      });
+      if (!ok) return false;
+
+      // UI 侧按 batch_id（优先）互斥，保持与 DB 一致
+      const scopeBatchId = suggestion.batch_id || null;
+      const scopeDecisionPointId = suggestion.decision_point_id || null;
+      setSuggestions((prev) => prev.map((item) => {
+        const sameScope = scopeBatchId
+          ? item.batch_id === scopeBatchId
+          : scopeDecisionPointId
+            ? item.decision_point_id === scopeDecisionPointId
+            : item.id === suggestion.id;
+        if (!sameScope) return item;
+        return {
+          ...item,
+          is_selected: selected ? item.id === suggestion.id : false,
+          selected_at: selected ? Date.now() : null
+        };
+      }));
+      return true;
+    } catch (err) {
+      console.error('[useSuggestions] Failed to select suggestion:', err);
+      return false;
     }
   }, []);
 
@@ -646,9 +702,11 @@ export const useSuggestions = (sessionInfo) => {
 
     // 方法
     handleGenerateSuggestions,
+    updateSuggestionConfig,
     triggerPassiveSuggestion,
     triggerTopicChangeSuggestion: () => maybeRunSituationDetection('topic_change'),
     handleCopySuggestion,
+    handleSelectSuggestion,
     handleNewMessage,
     clearSuggestionError,
     loadSuggestionConfig

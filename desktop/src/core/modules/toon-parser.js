@@ -57,6 +57,15 @@ const csvSplit = (line) => {
   return result;
 };
 
+const parseAffinityDelta = (raw) => {
+  if (raw === undefined || raw === null) return null;
+  const text = normalizeValue(String(raw));
+  if (!text) return null;
+  const parsed = Number.parseInt(text, 10);
+  if (Number.isNaN(parsed)) return null;
+  return Math.max(-10, Math.min(10, parsed));
+};
+
 export class ToonSuggestionStreamParser {
   constructor({ onHeader, onSuggestion, onPartialSuggestion, onError, onSkip } = {}) {
     this.onHeader = onHeader;
@@ -235,7 +244,28 @@ export class ToonSuggestionStreamParser {
       this.fields.includes('suggestion') &&
       this.fields.includes('tags');
 
-    const values = isSuggestionOnly ? splitByLastDelimiter(line) : csvSplit(line);
+    const isSuggestionAffinityTags =
+      this.fields.length === 3 &&
+      this.fields[0] === 'suggestion' &&
+      this.fields[1] === 'affinity_delta' &&
+      this.fields[2] === 'tags';
+
+    let values = [];
+    if (isSuggestionOnly) {
+      values = splitByLastDelimiter(line);
+    } else if (isSuggestionAffinityTags) {
+      // Robust split for: suggestion (may contain commas), affinity_delta (int), tags (comma-separated)
+      // Strategy: split by last delimiter => tags; then split remaining by last delimiter => affinity_delta.
+      const parts = splitByLastDelimiter(line);
+      const left = parts[0] ?? '';
+      const tagsRaw = parts[1] ?? '';
+      const parts2 = splitByLastDelimiter(left);
+      const suggestionRaw = parts2[0] ?? '';
+      const affinityRaw = parts2[1] ?? '';
+      values = [suggestionRaw, affinityRaw, tagsRaw];
+    } else {
+      values = csvSplit(line);
+    }
 
     console.log(`[ToonSuggestionStreamParser] Parsed CSV values: [${values.map(v => `"${v}"`).join(', ')}]`);
 
@@ -253,7 +283,8 @@ export class ToonSuggestionStreamParser {
 
     const normalized = {
       suggestion: suggestion.suggestion || suggestion.title || suggestion.content || `选项`,
-      tags: parseTags(suggestion.tags || suggestion.tag_list || '')
+      tags: parseTags(suggestion.tags || suggestion.tag_list || ''),
+      affinity_delta: parseAffinityDelta(suggestion.affinity_delta)
     };
 
     console.log(`[ToonSuggestionStreamParser] Normalized suggestion:`, normalized);
@@ -277,4 +308,3 @@ export class ToonSuggestionStreamParser {
 
 export const createToonSuggestionStreamParser = (options) =>
   new ToonSuggestionStreamParser(options);
-

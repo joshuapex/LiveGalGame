@@ -29,6 +29,9 @@ signing.properties
 /desktop/tests
 desktop/src/data
 desktop/.venv310
+/desktop/release
+/desktop/backend/build/
+/desktop/backend/dist/
 .venv
 /desktop/memory-service/.venv
 /desktop/memory-service/__pycache__

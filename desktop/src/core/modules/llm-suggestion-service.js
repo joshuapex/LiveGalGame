@@ -1,5 +1,6 @@
 import { buildSuggestionContext } from './suggestion-context-builder.js';
 import { createToonSuggestionStreamParser } from './toon-parser.js';
+import { renderPromptTemplate } from './prompt-manager.js';
 
 const MIN_SUGGESTION_COUNT = 2;
 const MAX_SUGGESTION_COUNT = 5;
@@ -8,6 +9,11 @@ const DEFAULT_SITUATION_MODEL = 'gpt-4o-mini';
 const DEFAULT_TIMEOUT_MS = 1000 * 15;
 const STREAM_TIMEOUT_MS = 1000 * 30;
 const DEFAULT_SITUATION_TIMEOUT_MS = 1000 * 5;
+
+function safeText(value) {
+  if (value === undefined || value === null) return '';
+  return String(value);
+}
 
 export default class LLMSuggestionService {
   constructor(dbGetter) {
@@ -61,6 +67,15 @@ export default class LLMSuggestionService {
     const num = Number(value ?? fallback ?? MIN_SUGGESTION_COUNT);
     if (Number.isNaN(num)) return MIN_SUGGESTION_COUNT;
     return Math.min(MAX_SUGGESTION_COUNT, Math.max(MIN_SUGGESTION_COUNT, Math.round(num)));
+  }
+
+  resolveTimeoutMs(config, fallback) {
+    const raw = config?.timeout_ms;
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return Math.round(parsed);
+    }
+    return fallback;
   }
 
   async generateSuggestions(payload = {}) {
@@ -156,10 +171,11 @@ export default class LLMSuggestionService {
 
     const abortController = new AbortController();
     // 增加超时时间，避免在上下文较长或网络波动时误触发超时
+    const streamTimeoutMs = this.resolveTimeoutMs(this.currentLLMConfig, STREAM_TIMEOUT_MS * 2);
     const timeoutId = setTimeout(() => {
-      console.error('[LLMSuggestionService] Stream timed out after', STREAM_TIMEOUT_MS * 2, 'ms');
+      console.error('[LLMSuggestionService] Stream timed out after', streamTimeoutMs, 'ms');
       abortController.abort(new Error('LLM生成超时，请稍后重试'));
-    }, STREAM_TIMEOUT_MS * 2);
+    }, streamTimeoutMs);
 
     let usageInfo = null;
     let emittedCount = 0;
@@ -425,114 +441,22 @@ export default class LLMSuggestionService {
           return `${index + 1}. ${item.title || '未命名'}：${item.content || ''}${tagsText}`;
         })
       ].join('\n')
-      : null;
+      : '';
 
-    return [
-      '# 角色定位',
-      '你是"恋爱互动教练"，职责包括两部分：',
-      '1. **判断时机**：分析对话状态，决定是否需要给用户提供回复建议',
-      '2. **生成建议**：如果需要，生成具体的回复策略和话术',
-      '',
-      '# 输出规则',
-      '- 如果对话不需要建议（角色自言自语/话没说完/自然闲聊流畅），直接输出：SKIP',
-      '- 如果需要建议，输出 TOON 格式的建议列表',
-      '- 禁止输出任何解释性文字如"好的"/"以下是"/"让我分析"',
-      '',
-      '---',
-      '',
-      `<触发方式>${triggerLabel}`,
-      `<触发策略指导>${triggerGuidance}`,
-      `<角色档案>${context.characterProfile}`,
-      `<好感阶段策略>${affinityStageText}`,
-      '<对话历史>',
-      `${context.historyText.join('\n')}`,
-      `<情感分析>${emotionText}`,
-      ...(previousSuggestionText ? [previousSuggestionText] : []),
-      '',
-      '---',
-      '',
-      '# Few-Shot 示例',
-      '',
-      '## 示例1：不需要建议 - 话未说完',
-      '```',
-      '【对话历史】',
-      '[10秒前] 角色：哈哈哈今天遇到一件超搞笑的事',
-      '[5秒前] 角色：我跟你说...',
-      '[2秒前] 角色：（还在打字中）',
-      '【情感分析】兴奋/期待分享',
-      '```',
-      '**输出：**',
-      'SKIP',
-      '',
-      '## 示例2：需要建议 - 角色提问/邀约',
-      '```',
-      '【对话历史】',
-      '[30秒前] 角色：最近工作还好吗？',
-      '[20秒前] 玩家：还行吧',
-      '[5秒前] 角色：那...周末有空吗？',
-      '【情感分析】期待/试探',
-      '【触发方式】静默/被动（上一条消息后沉默 8 秒）',
-      '```',
-      '**输出：**',
-      'suggestions[3]{suggestion,tags}:',
-      '积极回应"有空！"然后问她"有什么安排吗？"，表现出期待感,积极回应、推进',
-      '如果真的不确定，可以说"要看情况，怎么了？"再问清楚她的意图,稳妥确认、礼貌',
-      '用幽默的方式回"周末在等你约"配合一个调皮表情（适合暧昧期）,幽默暧昧、撩',
-      '',
-      '## 示例3：需要建议 - 尴尬冷场',
-      '```',
-      '【对话历史】',
-      '[3分钟前] 角色：今天上班好累啊...',
-      '[3分钟前] 玩家：辛苦啦～',
-      '[2分钟前] 角色：嗯...',
-      '[沉默 2 分钟]',
-      '【情感分析】疲惫/需要安慰',
-      '【触发方式】静默检测（沉默超过 2 分钟）',
-      '```',
-      '**输出：**',
-      'suggestions[3]{suggestion,tags}:',
-      '问她"要不要视频聊聊？"或"需要我陪你吗？"，展现关心,关心体贴、推进',
-      '分享你今天的趣事转移话题，如"我今天也遇到个搞笑的事..."，打破沉默,破冰、分享',
-      '直接问她"是不是有什么烦心事？"，鼓励她倾诉,共情倾听、深入',
-      '',
-      '## 示例4：需要建议 - 换一批（去重）',
-      '```',
-      '【对话历史】',
-      '[1分钟前] 角色：你觉得我怎么样？',
-      '【上一批建议】',
-      '1. 诚实夸奖她的优点，如"我觉得你很善良"',
-      '2. 用开玩笑的方式回避，如"你钓鱼执法呢？"',
-      '3. 反问她"你想听真话还是假话？"',
-      '【触发方式】用户点击"换一批"',
-      '```',
-      '**输出：**',
-      'suggestions[3]{suggestion,tags}:',
-      '主动示好说"我喜欢和你聊天"，然后问她为什么突然这么问,表达好感、推进',
-      '分享具体观察如"我发现你特别细心，上次还记得我说过的..."，用细节打动她,细节共情、真诚',
-      '稍微撩一下说"你想听我夸你吗？那要做好心理准备哦"，营造暧昧氛围,暧昧撩拨、幽默',
-      '',
-      '---',
-      '',
-      '# 正式任务',
-      '请根据上述【角色档案】和【对话历史】，判断是否需要建议：',
-      '- **如无需建议**，仅输出：SKIP',
-      `- **如需要建议**，输出 ${count} 条 TOON 格式建议，覆盖不同策略维度`,
-      '',
-      '【格式要求】',
-      '- TOON 格式表头：suggestions[${count}]{suggestion,tags}:',
-      '- 每行一个建议，格式：建议内容,标签列表',
-      '- suggestion（建议内容）：1-2句话的详细可执行思路/话术，结合角色喜好/忌讳与情感状态',
-      '- tags（策略标签）：2-3个策略标签，用逗号分隔（如"积极回应,推进"）',
-      '',
-      '【策略要求】',
-      '- 选项必须覆盖不同策略维度：保守稳妥、积极进取、轻松幽默、共情等，不要同质化',
-      '- 严格结合触发方式：静默→破冰延续；消息累积→综合回应；话题转折→先回应再推进；主动→多元供选',
-      '- 严格结合角色档案：投其所好、避开忌讳，符合性格与好感阶段边界',
-      '- 如果提供了上一批建议，务必生成不同方向的新选项，避免与列表雷同或轻微改写',
-      '- 不要直接代替玩家发言；不要输出泛化空话（如"多聊聊""继续沟通"）；不要复述历史；不编造不存在的事实',
-      '',
-      '请开始输出：'
-    ].join('\n');
+    const historyText = Array.isArray(context.historyText)
+      ? context.historyText.join('\n')
+      : safeText(context.historyText);
+
+    return renderPromptTemplate('suggestion', {
+      triggerLabel,
+      triggerGuidance,
+      characterProfile: safeText(context.characterProfile),
+      affinityStageText,
+      historyText,
+      emotionText,
+      previousSuggestionText,
+      count
+    });
   }
 
   extractJSON(text = '') {
@@ -557,6 +481,10 @@ export default class LLMSuggestionService {
         ? item.tags.split(/[,，、]/).map((tag) => tag.trim()).filter(Boolean).slice(0, 3)
         : [];
     const suggestionText = item.suggestion || item.title || item.content || `选项 ${index + 1}`;
+    const affinityPrediction =
+      typeof item.affinity_delta === 'number' && !Number.isNaN(item.affinity_delta)
+        ? Math.max(-10, Math.min(10, Math.round(item.affinity_delta)))
+        : null;
     return {
       id: suggestionId,
       title: suggestionText,
@@ -565,6 +493,7 @@ export default class LLMSuggestionService {
       // affinity_hint: item.affinity_hint || null,
       trigger,
       reason,
+      affinity_prediction: affinityPrediction,
       created_at: timestamp // 使用批次时间戳，确保同一批次的所有建议使用相同的时间戳
     };
   }
@@ -676,51 +605,15 @@ export default class LLMSuggestionService {
     }
     signalLines.push(`【触发来源提示】${triggerHint}`);
 
-    return [
-      '# Role',
-      '你是恋爱对话的“交互时机决策系统”，唯一任务是判断此刻是否需要立刻向玩家推送“回复建议”。',
-      '',
-      '# Task',
-      '分析【角色信息】【对话历史】【实时信号】，在“需要帮助/推进”时果断介入，在“无关紧要/自然流”时保持安静。',
-      '',
-      '# Decision Logic',
-      '1) need_options=true：',
-      '   - 关键交互：角色提问/邀约/二选一/期待表态。',
-      '   - 打破冷场：冷场时间较长（参考信号）。',
-      '   - 切入对话：连续角色消息较多（参考信号），需要给玩家回复选项。',
-      '2) need_options=false：',
-      '   - 仅日常陈述、感叹，无明确期待；对话流畅无需辅助。',
-      '',
-      '# Output (Strict TOON Format)',
-      '必须输出两行，禁止 JSON/代码块/解释/前缀/后缀：',
-      '',
-      '第一行（表头）：situation[1]{need_options,trigger,reason,confidence}:',
-      '第二行（数据）：值1,值2,值3,值4',
-      '',
-      '【格式要求】',
-      '- 表头和数据行必须分开，不能在同一行',
-      '- 表头必须以冒号结尾',
-      '- 数据行用英文逗号分隔，顺序对应表头字段',
-      '- reason字段如果包含逗号，请用引号包裹，如："理由,包含逗号"',
-      '',
-      '【字段说明】',
-      '- need_options: true 或 false（是否介入）',
-      '- trigger: question | invite | message_burst | silence | other',
-      '- reason: 简短中文决策理由，如"角色提问等待回答""冷场超10秒需破冰"',
-      '- confidence: 0.0-1.0 的数值',
-      '',
-      '【示例】',
-      'situation[1]{need_options,trigger,reason,confidence}:',
-      'true,silence,冷场超3秒需破冰,0.8',
-      '',
-      '# Context Data',
-      `【角色信息】${context.characterProfile}`,
-      '【对话历史】',
-      context.historyText,
-      ...signalLines,
-      '',
-      '请严格按照上述格式输出，表头和数据行必须分开，不要在同一行。'
-    ].join('\n');
+    const historyText = Array.isArray(context.historyText)
+      ? context.historyText.join('\n')
+      : safeText(context.historyText);
+
+    return renderPromptTemplate('situation', {
+      characterProfile: safeText(context.characterProfile),
+      historyText,
+      signalLines: signalLines.join('\n')
+    });
   }
 
   async evaluateSituation(payload = {}) {
@@ -809,9 +702,10 @@ export default class LLMSuggestionService {
     };
 
     try {
+      const timeoutMs = this.resolveTimeoutMs(this.currentLLMConfig, DEFAULT_SITUATION_TIMEOUT_MS);
       const stream = await this.runWithTimeout(
         client.chat.completions.create(requestParams, { signal: controller.signal }),
-        DEFAULT_SITUATION_TIMEOUT_MS
+        timeoutMs
       );
 
       return await new Promise((resolve, reject) => {

@@ -87,11 +87,19 @@ export function cleanModelScopeLocks(cacheDir, maxAgeMs = 10 * 60 * 1000) {
 function getModelCacheCandidates() {
   const homeDir = os.homedir();
   const userDataDir = app.getPath('userData');
+  const msEnv = process.env.MODELSCOPE_CACHE || process.env.MODELSCOPE_CACHE_HOME;
+  const msBase = msEnv && path.basename(msEnv).toLowerCase() === 'hub' ? path.dirname(msEnv) : msEnv;
+  const msHub = msBase ? path.join(msBase, 'hub') : (msEnv && path.basename(msEnv).toLowerCase() === 'hub' ? msEnv : null);
+  const appMsBase = path.join(userDataDir, 'asr-cache', 'modelscope');
+  const appMsHub = path.join(appMsBase, 'hub');
+
   return [
-    process.env.MODELSCOPE_CACHE,
+    msHub,
+    msBase,
     process.env.ASR_CACHE_DIR,
     process.env.HF_HOME ? path.join(process.env.HF_HOME, 'hub') : null,
-    path.join(userDataDir, 'asr-cache', 'modelscope', 'hub'),  // model-manager.js 下载位置
+    appMsHub,  // model-manager.js 默认下载位置（ModelScope hub）
+    appMsBase, // model-manager.js 默认下载位置（ModelScope base）
     path.join(userDataDir, 'hf-home', 'hub'),
     path.join(userDataDir, 'ms-cache'),
     homeDir ? path.join(homeDir, '.cache', 'huggingface', 'hub') : null,
@@ -189,4 +197,3 @@ export function resolveFunasrModelScopeCache(preset) {
 
   return { cacheDir: systemMsCache, found: false };
 }
-

@@ -159,6 +159,15 @@ export function registerDatabaseHandlers({ db }) {
     }
   });
 
+  ipcMain.handle('db-select-action-suggestion', (event, payload = {}) => {
+    try {
+      return db.selectActionSuggestion(payload);
+    } catch (error) {
+      console.error('Error selecting action suggestion:', error);
+      return false;
+    }
+  });
+
   ipcMain.handle('db-get-character-details', (event, characterId) => {
     try {
       return db.getCharacterDetails(characterId);
@@ -209,4 +218,3 @@ export function registerDatabaseHandlers({ db }) {
 
   console.log('Database IPC handlers registered');
 }
-

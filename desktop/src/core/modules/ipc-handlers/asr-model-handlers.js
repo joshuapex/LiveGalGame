@@ -3,12 +3,12 @@ import { ipcMain } from 'electron';
 /**
  * 注册 ASR 模型管理相关 IPC 处理器
  * @param {object} deps
- * @param {object} deps.modelManager
+ * @param {Function} deps.getModelManager
  */
-export function registerASRModelHandlers({ modelManager }) {
+export function registerASRModelHandlers({ getModelManager }) {
   ipcMain.handle('asr-get-model-presets', () => {
     try {
-      return modelManager.getModelPresets();
+      return getModelManager().getModelPresets();
     } catch (error) {
       console.error('Error getting ASR model presets:', error);
       return [];
@@ -17,7 +17,7 @@ export function registerASRModelHandlers({ modelManager }) {
 
   ipcMain.handle('asr-get-model-status', (event, modelId) => {
     try {
-      return modelManager.getModelStatus(modelId);
+      return getModelManager().getModelStatus(modelId);
     } catch (error) {
       console.error('Error getting ASR model status:', error);
       return null;
@@ -26,7 +26,7 @@ export function registerASRModelHandlers({ modelManager }) {
 
   ipcMain.handle('asr-get-all-model-statuses', () => {
     try {
-      return modelManager.getAllModelStatuses();
+      return getModelManager().getAllModelStatuses();
     } catch (error) {
       console.error('Error getting ASR model statuses:', error);
       return [];
@@ -35,7 +35,7 @@ export function registerASRModelHandlers({ modelManager }) {
 
   ipcMain.handle('asr-download-model', (event, modelId, source) => {
     try {
-      return modelManager.startDownload(modelId, source);
+      return getModelManager().startDownload(modelId, source);
     } catch (error) {
       console.error('Error starting ASR model download:', error);
       throw error;
@@ -44,7 +44,7 @@ export function registerASRModelHandlers({ modelManager }) {
 
   ipcMain.handle('asr-cancel-model-download', (event, modelId) => {
     try {
-      return modelManager.cancelDownload(modelId);
+      return getModelManager().cancelDownload(modelId);
     } catch (error) {
       console.error('Error cancelling ASR model download:', error);
       throw error;
@@ -53,4 +53,3 @@ export function registerASRModelHandlers({ modelManager }) {
 
   console.log('ASR Model IPC handlers registered');
 }
-

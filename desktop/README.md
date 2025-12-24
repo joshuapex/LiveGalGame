@@ -116,6 +116,70 @@ pnpm dev
 
 ---
 
+## 📦 桌面端发布规则（GitHub Actions）
+
+桌面端发布使用 tag 触发，并区分 **预发布** 和 **正式发布**：
+
+- **预发布（Prerelease）**：`vX.Y.Z-xxx`  
+  例：`v0.1.0-beta.1`
+- **正式发布（Release）**：`vX.Y.Z`  
+  例：`v0.1.0`
+
+Android 的发布已独立为 `android-v*` 标签，避免干扰桌面端发布。
+
+示例：
+
+```bash
+# 预发布（会生成 GitHub Prerelease）
+git tag v0.1.0-beta.1
+git push origin v0.1.0-beta.1
+
+# 正式发布（会生成 GitHub Release）
+git tag v0.1.0
+git push origin v0.1.0
+
+# Android 发布（仅 Android 流程触发）
+git tag android-v0.1.0
+git push origin android-v0.1.0
+```
+
+> 说明：桌面端产物为 macOS `.dmg` 与 Windows `.exe`，不会生成 APK。
+
+---
+
+## 🧰 模型下载与缓存目录（HF / ModelScope）
+
+应用内的语音识别模型（尤其是 FunASR ONNX）会在首次使用/点击下载时自动拉取，并缓存到本机磁盘。为了方便管理、并兼容 Windows / macOS 的默认目录差异，项目默认把缓存放到 Electron 的 `userData` 目录下（不同系统会自动选择合适位置）。
+
+如果你希望把模型统一下载到自己指定的盘符/目录（例如放到大硬盘、NAS 挂载目录等），推荐通过环境变量覆盖：
+
+- `ASR_CACHE_BASE`：ASR 缓存根目录（推荐只改这个）
+- `HF_HOME`：HuggingFace 缓存根目录（高级用法）
+- `ASR_CACHE_DIR`：HuggingFace hub 目录（高级用法）
+- `MODELSCOPE_CACHE`：ModelScope 缓存根目录（注意：实际会写到 `<MODELSCOPE_CACHE>/hub`）
+
+示例（macOS/Linux）：
+
+```bash
+ASR_CACHE_BASE=/data/livegalgame/asr-cache pnpm dev
+```
+
+示例（Windows PowerShell）：
+
+```powershell
+$env:ASR_CACHE_BASE="D:\\LiveGalGame\\asr-cache"; pnpm dev
+```
+
+如果你想手动使用 ModelScope CLI 把某个模型下载到指定位置（不走应用内下载），确实可以用：
+
+```bash
+modelscope download --model 'Qwen/Qwen2-7B' --local_dir /data/models/Qwen2-7B
+```
+
+但应用内的 FunASR 模型下载是由 `funasr_onnx` 触发的（不是直接下载单个 Qwen 模型），因此更推荐用上面的环境变量来统一管理缓存位置。
+
+---
+
 ## 🔧 开发者指南
 
 如果你想参与开发或了解技术细节，请查看项目源码：
@@ -126,4 +190,3 @@ pnpm dev
 - `src/db/` - 本地数据存储
 
 欢迎提交 PR！有问题请加 QQ 群：**1074602400**
-

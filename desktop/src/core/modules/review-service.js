@@ -1,3 +1,6 @@
+import { renderPromptTemplate } from './prompt-manager.js';
+
+const DEFAULT_REVIEW_TIMEOUT_MS = 1000 * 20;
 
 export default class ReviewService {
     constructor(dbGetter) {
@@ -85,6 +88,8 @@ export default class ReviewService {
         // 2. 按时间戳分组，识别节点
         report('group_nodes', 0.15, '识别决策点并分组...');
         const nodesRaw = this.groupIntoNodes(suggestions);
+        const explicitReviewNodes = this.buildReviewNodesFromUserSelection(nodesRaw);
+        const affinityFromSelection = this.computeAffinityChangeFromSelection(explicitReviewNodes);
         const conversation = this.db.getConversationById(conversationId);
 
         // 3. 特殊情况处理：
@@ -136,6 +141,10 @@ export default class ReviewService {
         // 6. 校验/兜底
         report('validate', 0.86, '校验并兜底复盘结构...');
         reviewData = this.ensureReviewDataIntegrity(reviewData, nodes, conversation);
+
+        // 6.1 覆盖好感度变化：完全由用户显式选择决定
+        if (!reviewData.summary) reviewData.summary = {};
+        reviewData.summary.total_affinity_change = affinityFromSelection;
 
         // 7. 保存
         report('save', 0.9, '保存复盘结果...');
@@ -243,7 +252,9 @@ export default class ReviewService {
 
         const nodes = [];
 
-        // 1) 新版：按 decision_point_id 聚合；同一决策点内取“最新 batch”作为该节点的选项
+        // 1) 新版：按 decision_point_id 聚合；
+        // - 若用户在某个 batch 显式选择了建议，则该决策点选择“被选中项所在 batch”作为节点选项（便于回放 ghost options）
+        // - 否则取“最新 batch”作为该节点的选项
         if (withDecisionPoint.length > 0) {
             const byDP = new Map();
             for (const s of withDecisionPoint) {
@@ -269,6 +280,15 @@ export default class ReviewService {
                 }
                 const batchCount = byBatch.size;
 
+                // 若存在显式选择，优先使用该 batch
+                let selectedBatchId = null;
+                for (const [batchId, list] of byBatch.entries()) {
+                    if (list.some((x) => x && (x.is_selected === 1 || x.is_selected === true || x.is_selected === '1'))) {
+                        selectedBatchId = batchId;
+                        break;
+                    }
+                }
+
                 let latestBatchId = null;
                 let latestBatchTs = -1;
                 for (const [batchId, list] of byBatch.entries()) {
@@ -279,7 +299,8 @@ export default class ReviewService {
                     }
                 }
 
-                const latest = (latestBatchId && byBatch.get(latestBatchId)) ? byBatch.get(latestBatchId) : group.list;
+                const pickedBatchId = selectedBatchId || latestBatchId;
+                const latest = (pickedBatchId && byBatch.get(pickedBatchId)) ? byBatch.get(pickedBatchId) : group.list;
                 const sortedLatest = [...latest].sort((a, b) => {
                     const aIndex = a.suggestion_index ?? a.index ?? 999;
                     const bIndex = b.suggestion_index ?? b.index ?? 999;
@@ -288,7 +309,7 @@ export default class ReviewService {
 
                 nodes.push({
                     decision_point_id: group.dpId,
-                    batch_id: latestBatchId !== 'unknown' ? latestBatchId : null,
+                    batch_id: pickedBatchId !== 'unknown' ? pickedBatchId : null,
                     batch_count: batchCount,
                     timestamp: sortedLatest[0]?.created_at || group.minTs,
                     suggestions: sortedLatest
@@ -478,7 +499,36 @@ export default class ReviewService {
             "- 必须以 `review_node:` 或 `review_summary:` 开头。"
         );
 
-        return sections.join('\\n');
+        return sections.join('\n');
+    }
+
+    buildReviewNodesFromUserSelection(nodes = []) {
+        const reviewNodes = [];
+        for (const node of nodes || []) {
+            const suggestions = Array.isArray(node.suggestions) ? node.suggestions : [];
+            const selected = suggestions.find((s) => s && (s.is_selected === 1 || s.is_selected === true || s.is_selected === '1')) || null;
+            reviewNodes.push({
+                node_id: node.node_id,
+                node_title: selected?.title || '已选择建议',
+                timestamp: node.timestamp || 0,
+                choice_type: selected ? 'selected' : 'unselected',
+                selected_suggestion_id: selected?.id || null,
+                selected_affinity_delta: typeof selected?.affinity_prediction === 'number' ? selected.affinity_prediction : null,
+                user_description: selected?.content || selected?.title || (selected ? '已选择建议' : '未选择建议'),
+                reasoning: selected
+                    ? `该节点为用户显式选择：${selected.title || selected.id || '建议'}.`
+                    : '该节点未进行显式选择，无法从系统记录确定采用了哪个选项。',
+                ghost_options: []
+            });
+        }
+        return reviewNodes;
+    }
+
+    computeAffinityChangeFromSelection(reviewNodes = []) {
+        const deltas = Array.isArray(reviewNodes) ? reviewNodes.map((n) => n?.selected_affinity_delta).filter((v) => typeof v === 'number' && !Number.isNaN(v)) : [];
+        const sum = deltas.reduce((acc, v) => acc + v, 0);
+        // 复盘口径：整段对话总变化限制到 [-10, +10]（与 UI/历史数据兼容）
+        return Math.max(-10, Math.min(10, Math.round(sum)));
     }
 
     async callLLMForReview(messages, nodes) {
@@ -488,6 +538,11 @@ export default class ReviewService {
         console.log('[ReviewService] Sending prompt to LLM:', prompt);
 
         let completion;
+        const timeoutMs = this.resolveTimeoutMs(this.currentLLMConfig, DEFAULT_REVIEW_TIMEOUT_MS);
+        const controller = new AbortController();
+        const timer = setTimeout(() => {
+            controller.abort(new Error('LLM生成超时，请稍后重试'));
+        }, timeoutMs);
         try {
             completion = await client.chat.completions.create({
                 model: this.currentLLMConfig.model_name,
@@ -495,10 +550,12 @@ export default class ReviewService {
                 max_tokens: 20000, // 按 200k context 来，给足输出空间
                 reasoning_effort: "high", // 启用推理过程（仅用于复盘）
                 stream: false
-            });
+            }, { signal: controller.signal });
         } catch (apiError) {
             console.error('[ReviewService] LLM API 调用失败:', apiError);
             throw new Error(`LLM API 调用失败: ${apiError.message || apiError}`);
+        } finally {
+            clearTimeout(timer);
         }
 
         console.log('[ReviewService] LLM API 响应:', JSON.stringify(completion, null, 2));
@@ -539,6 +596,15 @@ export default class ReviewService {
             result.push(current);
         }
         return result.map(s => s.trim().replace(/^["']|["']$/g, '')); // Trim and unquote
+    }
+
+    resolveTimeoutMs(config, fallback) {
+        const raw = config?.timeout_ms;
+        const parsed = Number(raw);
+        if (Number.isFinite(parsed) && parsed > 0) {
+            return Math.round(parsed);
+        }
+        return fallback;
     }
 
     parseReviewToon(text, originalNodes) {

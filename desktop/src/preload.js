@@ -142,6 +142,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAllConversations: () => ipcRenderer.invoke('db-get-all-conversations'),
   updateMessage: (messageId, updates) => ipcRenderer.invoke('db-update-message', messageId, updates),
   getConversationAIData: (conversationId) => ipcRenderer.invoke('db-get-conversation-ai-data', conversationId),
+  selectActionSuggestion: (payload) => ipcRenderer.invoke('db-select-action-suggestion', payload),
   getCharacterDetails: (characterId) => ipcRenderer.invoke('db-get-character-details', characterId),
   updateCharacterDetailsCustomFields: (characterId, customFields) => ipcRenderer.invoke('db-update-character-details-custom-fields', characterId, customFields),
   regenerateCharacterDetails: (characterId) => ipcRenderer.invoke('db-regenerate-character-details', characterId),
@@ -239,6 +240,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   asrGetAudioDataUrl: (filePath) => ipcRenderer.invoke('asr-get-audio-data-url', filePath),
   asrDeleteAudioFile: (payload) => ipcRenderer.invoke('asr-delete-audio-file', payload),
   asrReloadModel: () => ipcRenderer.invoke('asr-reload-model'),
+  // 模型缓存目录（HF / ModelScope）配置
+  appGetModelCachePaths: () => ipcRenderer.invoke('app-get-model-cache-paths'),
+  appSelectDirectory: (options) => ipcRenderer.invoke('app-select-directory', options),
+  appSetAsrCacheBase: (cacheBase) => ipcRenderer.invoke('app-set-asr-cache-base', cacheBase),
   onAsrModelDownloadStarted: (callback) => {
     const listener = (event, payload) => callback(payload);
     ipcRenderer.on('asr-model-download-started', listener);

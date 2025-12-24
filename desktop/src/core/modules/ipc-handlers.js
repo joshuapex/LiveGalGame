@@ -14,6 +14,7 @@ import { registerMemoryHandlers } from './ipc-handlers/memory-handlers.js';
 import { registerASRModelHandlers } from './ipc-handlers/asr-model-handlers.js';
 import { registerASRAudioHandlers } from './ipc-handlers/asr-audio-handlers.js';
 import { registerMediaHandlers } from './ipc-handlers/media-handlers.js';
+import { registerAppConfigHandlers } from './ipc-handlers/app-config-handlers.js';
 
 /**
  * IPC 处理器管理器 - 负责注册所有 IPC 通信处理器
@@ -102,6 +103,7 @@ export class IPCManager {
     this.initReviewService();
     this.initMemoryService();
     this.setupWindowHandlers();
+    this.setupAppConfigHandlers();
     this.setupDatabaseHandlers();
     this.setupLLMHandlers();
     this.setupSuggestionHandlers();
@@ -130,6 +132,24 @@ export class IPCManager {
     registerWindowHandlers({
       windowManager: this.windowManager,
       checkASRReady: () => this.checkASRReady()
+    });
+  }
+
+  /**
+   * 设置应用级配置相关 IPC 处理器（如模型缓存目录）
+   */
+  setupAppConfigHandlers() {
+    registerAppConfigHandlers({
+      onAsrCacheChanged: async () => {
+        // 1) 让 ModelManager 重新读取环境变量（下载落盘位置）
+        this.modelManager = new ASRModelManager();
+        // 2) 重载 ASR 后端，保证其读取到新的缓存目录
+        try {
+          await this.reloadASRModel();
+        } catch (error) {
+          console.warn('[ASR] Reload after cache change failed:', error);
+        }
+      }
     });
   }
 
@@ -170,7 +190,14 @@ export class IPCManager {
    * 设置 ASR 模型管理相关 IPC 处理器
    */
   setupASRModelHandlers() {
-    registerASRModelHandlers({ modelManager: this.modelManager });
+    registerASRModelHandlers({
+      getModelManager: () => {
+        if (!this.modelManager) {
+          this.modelManager = new ASRModelManager();
+        }
+        return this.modelManager;
+      }
+    });
   }
 
   /**

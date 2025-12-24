@@ -8,6 +8,19 @@ import { ASR_MODEL_PRESETS, getAsrModelPreset } from '../shared/asr-models.js';
 
 const DOWNLOAD_FUNASR_SCRIPT = path.join(app.getAppPath(), 'scripts', 'download_funasr_model.py');
 
+function normalizeModelScopeCache(cachePath) {
+  if (!cachePath) {
+    return { base: null, hub: null };
+  }
+  const normalized = path.resolve(cachePath);
+  // ModelScope 的默认目录结构通常是: <MODELSCOPE_CACHE>/hub/...
+  // 但历史上我们也可能把 env 直接设成了 ".../hub"。这里做兼容归一化。
+  if (path.basename(normalized).toLowerCase() === 'hub') {
+    return { base: path.dirname(normalized), hub: normalized };
+  }
+  return { base: normalized, hub: path.join(normalized, 'hub') };
+}
+
 function safeReaddir(targetPath) {
   try {
     return fs.readdirSync(targetPath, { withFileTypes: true });
@@ -86,14 +99,22 @@ export default class ASRModelManager extends EventEmitter {
     // 应用级缓存根目录（可通过环境变量覆盖）
     this.appCacheBase = process.env.ASR_CACHE_BASE || path.join(app.getPath('userData'), 'asr-cache');
     this.hfHome = process.env.HF_HOME || path.join(this.appCacheBase, 'hf-home');
-    this.msCache = process.env.MODELSCOPE_CACHE || path.join(this.appCacheBase, 'modelscope', 'hub');
+    const msEnv = process.env.MODELSCOPE_CACHE || process.env.MODELSCOPE_CACHE_HOME;
+    const msNormalized = normalizeModelScopeCache(msEnv || path.join(this.appCacheBase, 'modelscope'));
+    this.msCacheBase = msNormalized.base;
+    this.msCacheHub = msNormalized.hub;
 
     // Primary cache directory (共享给 HF 默认 hub)
     this.cacheDir = process.env.ASR_CACHE_DIR || path.join(this.hfHome, 'hub');
     try {
       fs.mkdirSync(this.cacheDir, { recursive: true });
       fs.mkdirSync(this.hfHome, { recursive: true });
-      fs.mkdirSync(this.msCache, { recursive: true });
+      if (this.msCacheBase) {
+        fs.mkdirSync(this.msCacheBase, { recursive: true });
+      }
+      if (this.msCacheHub) {
+        fs.mkdirSync(this.msCacheHub, { recursive: true });
+      }
     } catch {
       // ignore mkdir errors
     }
@@ -106,7 +127,8 @@ export default class ASRModelManager extends EventEmitter {
     // List of cache directories to check (in priority order)
     this.cacheDirs = [
       this.cacheDir,           // App-configured cache
-      this.msCache,            // App ModelScope cache
+      this.msCacheHub,         // App ModelScope hub
+      this.msCacheBase,        // App ModelScope base (兼容某些工具只写到 base)
       this.systemHfCache,      // System default HF cache
       this.systemMsCache       // System default ModelScope cache
     ].filter(dir => {
@@ -509,7 +531,7 @@ export default class ASRModelManager extends EventEmitter {
       '--model-id',
       preset.id,
       '--cache-dir',
-      this.msCache // FunASR 默认用 ModelScope 缓存
+      this.msCacheBase || this.msCacheHub // FunASR 默认用 ModelScope 缓存
     ];
 
     console.log(`[ASR ModelManager] Starting download: modelId=${modelId}, source=${source}, repoId=${repoId}`);
@@ -518,12 +540,13 @@ export default class ASRModelManager extends EventEmitter {
     console.log(`[ASR ModelManager] Spawn command: ${pythonExecutable} ${args.join(' ')}`);
 
     const hfHomeEnv = this.hfHome || process.env.HF_HOME;
-    const msCacheEnv = this.msCache || process.env.MODELSCOPE_CACHE;
+    const msCacheEnv = this.msCacheBase || process.env.MODELSCOPE_CACHE;
     const env = {
       ...process.env,
       ASR_CACHE_DIR: this.cacheDir,
       HF_HOME: hfHomeEnv,
       MODELSCOPE_CACHE: msCacheEnv,
+      MODELSCOPE_CACHE_HOME: msCacheEnv,
       PYTHONIOENCODING: 'utf-8',
     };
     const child = spawn(pythonExecutable, args, { env });

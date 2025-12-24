@@ -334,10 +334,39 @@ body {
   border: 1px solid rgba(197, 22, 98, 0.3);
   box-shadow: inset 0 0 12px rgba(255, 255, 255, 0.3);
   transition: transform 0.2s ease;
+  cursor: pointer;
+  position: relative;
 }
 
 .suggestion-card:hover {
   transform: translateY(-2px);
+}
+
+.suggestion-card.copied {
+  border-color: rgba(16, 185, 129, 0.65);
+  box-shadow: inset 0 0 12px rgba(255, 255, 255, 0.3), 0 0 0 2px rgba(16, 185, 129, 0.25);
+}
+
+.suggestion-card:focus-visible {
+  outline: 2px solid rgba(99, 102, 241, 0.55);
+  outline-offset: 2px;
+}
+
+.suggestion-selected-indicator {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: 1px solid rgba(16, 185, 129, 0.55);
+  background: rgba(16, 185, 129, 0.12);
+  color: rgba(16, 185, 129, 0.95);
+  font-size: 14px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .suggestion-header {
@@ -362,6 +391,65 @@ body {
   gap: 6px;
   margin-top: 10px;
   flex-wrap: wrap;
+}
+
+.suggestion-tags {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 10px;
+  width: 100%;
+}
+
+.suggestion-tag {
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.suggestion-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.suggestion-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(197, 22, 98, 0.25);
+  background: rgba(255, 255, 255, 0.55);
+  color: rgba(15, 23, 42, 0.8);
+  font-size: 11px;
+  user-select: none;
+}
+
+.suggestion-toggle input {
+  width: 14px;
+  height: 14px;
+}
+
+.suggestion-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.suggestion-select-btn {
+  border: 1px solid rgba(197, 22, 98, 0.25);
+  background: rgba(255, 255, 255, 0.55);
+  color: rgba(15, 23, 42, 0.85);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.suggestion-select-btn:hover {
+  background: rgba(255, 255, 255, 0.75);
 }
 
 .suggestion-badge {
@@ -649,4 +737,3 @@ body {
   width: 36px;
   text-align: right;
 }
-
