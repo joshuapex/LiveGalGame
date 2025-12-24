@@ -27,6 +27,10 @@ jobs:
     name: Build APK
     runs-on: ubuntu-latest
     
+    defaults:
+      run:
+        working-directory: ./mobile
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -115,7 +119,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: LiveGG-v${{ steps.version.outputs.VERSION_NAME }}
-          path: app/build/outputs/apk/release/*.apk
+          path: mobile/app/build/outputs/apk/release/*.apk
           retention-days: 30
           compression-level: 0
 
@@ -138,7 +142,7 @@ jobs:
       - name: Extract version information
         id: version
         run: |
-          VERSION_NAME=$(grep 'versionName = ' app/build.gradle.kts | sed 's/.*versionName = "\(.*\)"/\1/')
+          VERSION_NAME=$(grep 'versionName = ' mobile/app/build.gradle.kts | sed 's/.*versionName = "\(.*\)"/\1/')
           echo "VERSION_NAME=${VERSION_NAME}" >> $GITHUB_OUTPUT
 
       - name: Download APK artifact
