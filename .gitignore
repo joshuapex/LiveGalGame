@@ -56,3 +56,7 @@ test.mp4
 # Desktop docs (local only)
 desktop/docs/
 **/node_modules
+
+# Environment variables
+.env
+.env.*

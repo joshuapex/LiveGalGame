@@ -149,9 +149,10 @@ export default class LLMSuggestionService {
 
     const requestParams = {
       model: modelName,
-      temperature: trigger === 'manual' ? 0.8 : 0.6,
+      temperature: trigger === 'manual' ? 1.0 : 0.9,
       max_tokens: 4096,
-      reasoning_effort: "disabled", // 禁用推理（建议生成不需要推理）
+      reasoning_effort: "disabled", // 禁用 OpenAI 风格推理
+      thinking: { type: "disabled" }, // 禁用智谱/GLM 风格深度思考
       stream: true,
       messages: [
         {
@@ -447,6 +448,10 @@ export default class LLMSuggestionService {
       ? context.historyText.join('\n')
       : safeText(context.historyText);
 
+    const skipRule = trigger === 'manual'
+      ? '- 必须生成建议，禁止输出 SKIP。'
+      : '- 如果对话不需要建议（角色自言自语/话没说完/自然闲聊流畅），直接输出：SKIP';
+
     return renderPromptTemplate('suggestion', {
       triggerLabel,
       triggerGuidance,
@@ -455,7 +460,8 @@ export default class LLMSuggestionService {
       historyText,
       emotionText,
       previousSuggestionText,
-      count
+      count,
+      skipRule
     });
   }
 
@@ -659,7 +665,8 @@ export default class LLMSuggestionService {
       model: modelName,
       temperature: 0,
       max_tokens: 120,
-      reasoning_effort: "disabled", // 禁用推理（情境检测不需要推理）
+      reasoning_effort: "disabled", // 禁用 OpenAI 风格推理
+      thinking: { type: "disabled" }, // 禁用智谱/GLM 风格深度思考
       stream: true,
       messages: [
         {
@@ -918,3 +925,4 @@ export default class LLMSuggestionService {
     return this.resolveModelName(llmConfig, suggestionConfig) || DEFAULT_SITUATION_MODEL;
   }
 }
+

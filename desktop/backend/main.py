@@ -32,7 +32,7 @@ DEFAULT_ENGINE = os.environ.get("ASR_ENGINE", "funasr").lower()
 DEFAULT_MODEL = os.environ.get("ASR_MODEL", "funasr-paraformer")
 
 # 支持的引擎列表
-SUPPORTED_ENGINES = {"funasr", "siliconflow"}
+SUPPORTED_ENGINES = {"funasr", "siliconflow", "baidu"}
 
 
 def _print_debug_info():
@@ -122,6 +122,8 @@ class WorkerBridge:
             return base_dir / "asr_funasr_worker.py"
         if self.engine == "siliconflow":
             return base_dir / "asr_siliconflow_worker.py"
+        if self.engine == "baidu":
+            return base_dir / "asr_baidu_worker.py"
         # Fallback to generic worker
         return base_dir / "asr_worker.py"
 

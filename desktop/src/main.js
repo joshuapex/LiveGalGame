@@ -44,7 +44,7 @@ function initFileLogging() {
     const now = new Date();
     const ts = `${now.getFullYear()}${pad2(now.getMonth() + 1)}${pad2(now.getDate())}_${pad2(now.getHours())}${pad2(now.getMinutes())}${pad2(now.getSeconds())}`;
     const logFile = path.join(logsDir, `livegalgame-desktop_${ts}.log`);
-    const stream = fs.createWriteStream(logFile, { flags: 'a' });
+    const stream = fs.createWriteStream(logFile, { flags: 'a', encoding: 'utf8' });
 
     const writeLine = (level, args) => {
       const time = new Date().toISOString();

@@ -139,13 +139,13 @@ body {
 }
 
 .suggestion-action-btn {
-  height: 28px;
-  padding: 0 12px;
-  border-radius: 14px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 12px;
   border: 1px solid rgba(197, 22, 98, 0.3);
   background: rgba(197, 22, 98, 0.05);
   color: #c51662;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -417,19 +417,19 @@ body {
 .suggestion-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
+  gap: 4px;
+  padding: 2px 6px;
   border-radius: 999px;
   border: 1px solid rgba(197, 22, 98, 0.25);
   background: rgba(255, 255, 255, 0.55);
   color: rgba(15, 23, 42, 0.8);
-  font-size: 11px;
+  font-size: 10px;
   user-select: none;
 }
 
 .suggestion-toggle input {
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
 }
 
 .suggestion-card-actions {
@@ -443,8 +443,8 @@ body {
   background: rgba(255, 255, 255, 0.55);
   color: rgba(15, 23, 42, 0.85);
   border-radius: 999px;
-  padding: 4px 10px;
-  font-size: 11px;
+  padding: 3px 8px;
+  font-size: 10.5px;
   font-weight: 600;
 }
 
@@ -453,8 +453,8 @@ body {
 }
 
 .suggestion-badge {
-  padding: 2px 8px;
-  font-size: 10px;
+  padding: 1px 6px;
+  font-size: 9px;
   font-weight: 600;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.5);

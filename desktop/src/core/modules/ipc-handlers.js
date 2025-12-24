@@ -231,7 +231,8 @@ export class IPCManager {
    */
   getOrCreateASRManager() {
     if (!this.asrManager) {
-      this.asrManager = new ASRManager();
+      this.initDatabase();
+      this.asrManager = new ASRManager(this.db);
       this.asrManager.setEventEmitter(this.emitASREvent);
 
       // 设置服务器崩溃回调

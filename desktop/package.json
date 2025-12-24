@@ -6,8 +6,9 @@
   "main": "src/main.js",
   "scripts": {
     "predev": "node scripts/ensure-port-free.js",
-    "dev": "pnpm run predev && concurrently -k \"vite\" \"npm run dev:electron\"",
-    "dev:electron": "cross-env NODE_ENV=development electron . --enable-logging",
+    "dev": "chcp 65001 > nul && pnpm run predev && concurrently -k \"vite\" \"npm run dev:electron\"",
+    "dev:log": "node scripts/dev-log.js",
+    "dev:electron": "cross-env NODE_ENV=development PYTHONIOENCODING=utf-8 electron . --enable-logging",
     "dev:vite": "vite",
     "download-models": "node scripts/download-models.js",
     "update-asr-model": "node scripts/update-asr-model.js",

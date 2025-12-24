@@ -69,6 +69,7 @@ export function createSentenceHandlers(manager) {
       }
 
       const currentSegment = manager.currentSegments.get(sessionId);
+      const effectiveTimestamp = timestamp || Date.now();
 
       if (currentSegment && currentSegment.messageId) {
         const isCloudModel = String(manager.modelName || '').includes('cloud');
@@ -103,8 +104,8 @@ export function createSentenceHandlers(manager) {
 
         const updatedRecord = manager.db.updateSpeechRecord(currentSegment.recordId, {
           recognized_text: effectiveText,
-          end_time: timestamp,
-          audio_duration: audioDuration || (timestamp - (currentSegment.startTime || timestamp)) / 1000
+          end_time: effectiveTimestamp,
+          audio_duration: audioDuration || (effectiveTimestamp - (currentSegment.startTime || effectiveTimestamp)) / 1000
         });
 
         if (!updatedRecord) {
@@ -136,6 +137,11 @@ export function createSentenceHandlers(manager) {
           sourceId: sessionId
         });
 
+        if (isSegmentEnd) {
+          logger.log(`[Sentence Complete] Committing segment after update: ${sessionId}`);
+          manager.commitCurrentSegment(sessionId);
+        }
+
         return updatedMessage;
       }
 
@@ -144,8 +150,8 @@ export function createSentenceHandlers(manager) {
       const record = await manager.saveRecognitionRecord(sessionId, {
         text: normalizedText,
         confidence: trigger === 'punctuation' ? 0.98 : 0.95,
-        startTime: timestamp - (audioDuration || manager.SILENCE_TIMEOUT),
-        endTime: timestamp,
+        startTime: effectiveTimestamp - (audioDuration || manager.SILENCE_TIMEOUT),
+        endTime: effectiveTimestamp,
         audioDuration: audioDuration || manager.SILENCE_TIMEOUT / 1000,
         isPartial: false,
         audioData: null
@@ -156,7 +162,7 @@ export function createSentenceHandlers(manager) {
         return null;
       }
 
-      manager.addToRecognitionCache(sessionId, normalizedText, timestamp);
+      manager.addToRecognitionCache(sessionId, normalizedText, effectiveTimestamp);
 
       const message = await manager.convertRecordToMessage(record.id, manager.currentConversationId);
       message.source_id = sessionId;
@@ -166,7 +172,7 @@ export function createSentenceHandlers(manager) {
         messageId: message.id,
         recordId: record.id,
         lastText: normalizedText,
-        startTime: timestamp - (audioDuration || manager.SILENCE_TIMEOUT)
+        startTime: effectiveTimestamp - (audioDuration || manager.SILENCE_TIMEOUT)
       });
 
       if (manager.eventEmitter) {
@@ -233,4 +239,3 @@ export function createSentenceHandlers(manager) {
 
   return { handleSentenceComplete, handlePartialResult };
 }
-

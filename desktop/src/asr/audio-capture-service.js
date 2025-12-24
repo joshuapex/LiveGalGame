@@ -29,6 +29,7 @@ class AudioCaptureService {
     this.sentencePauseThresholdMs = 600; // 默认更灵敏（0.6s），会自动从 ASR 默认配置刷新
     this._vadConfigLastRefreshAt = 0;
     this.enableSilenceSentenceCommit = false; // 仅云端 ASR 启用，FunASR 不受影响
+    this.shouldSkipSilence = true; // 是否在本地跳过静音包（百度需要设为 false 以防 -3101）
     this.silenceDurationMs = new Map(); // sourceId -> 连续静音累计时长(ms)，仅在 inSpeech=true 时累积
     this.inSpeech = new Map(); // sourceId -> 是否处于“说话段”中（只要发送过非静音音频即认为进入）
     this.lastSilenceCommitAt = new Map(); // sourceId -> 上次触发断句的时间戳(ms)
@@ -409,7 +410,8 @@ class AudioCaptureService {
       }
 
       // 【VAD】静音检测 - 跳过静音数据，避免 ASR 模型产生幻觉
-      if (this.isSilence(accumulator)) {
+      // 注意：如果 shouldSkipSilence 为 false（如百度模式），则不跳过，以防服务端超时
+      if (this.shouldSkipSilence && this.isSilence(accumulator)) {
         // 【断句】若之前处于说话状态，则累计静音时长；超过阈值触发“分句提交”
         const wasInSpeech = this.enableSilenceSentenceCommit && !!this.inSpeech.get(sourceId);
         if (wasInSpeech) {
@@ -679,7 +681,13 @@ class AudioCaptureService {
       const defaultConfig = configs?.find((c) => c?.is_default === 1) || configs?.[0];
       const modelName = String(defaultConfig?.model_name || '');
       // 仅云端 ASR 启用“静音断句生成多条消息”，避免影响 FunASR
-      this.enableSilenceSentenceCommit = modelName.includes('cloud');
+      // 注意：百度 WebSocket 自带断句，不再由前端干预，避免 1005 错误
+      this.enableSilenceSentenceCommit = modelName.includes('cloud') && !modelName.includes('baidu');
+      
+      // 对于百度，我们【不要】在本地跳过静音包。
+      // 因为百度服务端如果超过 10s-20s 收不到音频包，会报 -3101 超时错误。
+      // 我们把所有数据（包括静音）都发给百度，让百度强大的服务端 VAD 去处理。
+      this.shouldSkipSilence = !modelName.includes('baidu');
 
       const pauseSecRaw = Number(defaultConfig?.sentence_pause_threshold);
       if (!Number.isFinite(pauseSecRaw) || pauseSecRaw <= 0) {

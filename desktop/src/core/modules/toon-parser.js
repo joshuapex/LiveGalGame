@@ -1,19 +1,40 @@
 const HEADER_REGEX = /^suggestions\[(\d+)\]\{([^}]+)\}:\s*$/i;
 
-const STRING_QUOTES = /^["']|["']$/g;
+const INLINE_ROW_REGEX = /^suggestions\[(\d+)\]\{([^}]+)\}\s*;?\s*$/i;
+
+const STRING_QUOTES = /^["'“”]|["'“”]$/g;
 
 const DEFAULT_FIELDS = ['suggestion', 'tags'];
 
-const normalizeValue = (value = '') => value.replace(STRING_QUOTES, '').trim();
+const normalizeValue = (value = '') => {
+  let v = value.trim();
+  // 处理成对的中文引号
+  if (v.startsWith('“') && v.endsWith('”')) {
+    v = v.slice(1, -1);
+  } else if (v.startsWith('‘') && v.endsWith('’')) {
+    v = v.slice(1, -1);
+  }
+  return v.replace(STRING_QUOTES, '').trim();
+};
 
 // 针对 suggestion/tags，取“最后一个未被引号包裹的逗号（中/英文）”作为分隔
 const splitByLastDelimiter = (line) => {
   let inQuotes = false;
+  let quoteChar = null;
   let lastIndex = -1;
   for (let i = 0; i < line.length; i += 1) {
     const char = line[i];
-    if (char === '"' && line[i - 1] !== '\\') {
-      inQuotes = !inQuotes;
+    if ((char === '"' || char === '“' || char === '”') && line[i - 1] !== '\\') {
+      if (!inQuotes) {
+        inQuotes = true;
+        quoteChar = char;
+      } else {
+        // 如果是匹配的引号或者是结束引号，则结束
+        if (char === '"' || (quoteChar === '“' && char === '”') || (quoteChar === char)) {
+          inQuotes = false;
+          quoteChar = null;
+        }
+      }
       continue;
     }
     if (!inQuotes && (char === ',' || char === '，')) {
@@ -38,10 +59,19 @@ const csvSplit = (line) => {
   const result = [];
   let current = '';
   let inQuotes = false;
+  let quoteChar = null;
   for (let i = 0; i < line.length; i += 1) {
     const char = line[i];
-    if (char === '"' && line[i - 1] !== '\\') {
-      inQuotes = !inQuotes;
+    if ((char === '"' || char === '“' || char === '”') && line[i - 1] !== '\\') {
+      if (!inQuotes) {
+        inQuotes = true;
+        quoteChar = char;
+      } else {
+        if (char === '"' || (quoteChar === '“' && char === '”') || (quoteChar === char)) {
+          inQuotes = false;
+          quoteChar = null;
+        }
+      }
       continue;
     }
     if ((char === ',' || char === '，') && !inQuotes) {
@@ -151,6 +181,27 @@ export class ToonSuggestionStreamParser {
       return;
     }
 
+    // 处理某些模型可能出现的每行都带 suggestions[N]{...} 的变体格式
+    const inlineMatch = line.match(INLINE_ROW_REGEX);
+    if (inlineMatch && !line.match(HEADER_REGEX)) {
+      console.log('[ToonSuggestionStreamParser] Detected inline row format');
+      const count = Number(inlineMatch[1]);
+      const content = inlineMatch[2];
+
+      if (!this.headerParsed) {
+        console.log('[ToonSuggestionStreamParser] Implicitly parsing header from inline row');
+        this.expectedCount = count;
+        this.fields = ['suggestion', 'affinity_delta', 'tags'];
+        this.headerParsed = true;
+        if (typeof this.onHeader === 'function') {
+          this.onHeader({ expectedCount: this.expectedCount, fields: this.fields });
+        }
+      }
+
+      this.parseRow(content);
+      return;
+    }
+
     const lower = line.toLowerCase();
     const normalizedToon = lower.replace(/[`]/g, '').replace(/\s/g, '');
     if (
@@ -207,7 +258,14 @@ export class ToonSuggestionStreamParser {
 
     const fieldList = match[2]
       .split(',')
-      .map((field) => field.trim())
+      .map((field) => {
+        const f = field.trim();
+        // 映射常见的中文表头到标准字段名
+        if (f === '建议内容' || f === '建议') return 'suggestion';
+        if (f === '好感度变化' || f === '好感变化' || f === '好感变化预测') return 'affinity_delta';
+        if (f === '标签' || f === '策略标签') return 'tags';
+        return f;
+      })
       .filter(Boolean);
     console.log(`[ToonSuggestionStreamParser] Parsed fields: [${fieldList.join(', ')}]`);
 
@@ -254,15 +312,32 @@ export class ToonSuggestionStreamParser {
     if (isSuggestionOnly) {
       values = splitByLastDelimiter(line);
     } else if (isSuggestionAffinityTags) {
-      // Robust split for: suggestion (may contain commas), affinity_delta (int), tags (comma-separated)
-      // Strategy: split by last delimiter => tags; then split remaining by last delimiter => affinity_delta.
-      const parts = splitByLastDelimiter(line);
-      const left = parts[0] ?? '';
-      const tagsRaw = parts[1] ?? '';
-      const parts2 = splitByLastDelimiter(left);
-      const suggestionRaw = parts2[0] ?? '';
-      const affinityRaw = parts2[1] ?? '';
-      values = [suggestionRaw, affinityRaw, tagsRaw];
+      // 更加稳健的切分策略：寻找符合好感度变化（数字）的部分作为锚点
+      const allParts = csvSplit(line);
+      let affinityIndex = -1;
+      for (let i = allParts.length - 1; i >= 0; i -= 1) {
+        const val = normalizeValue(allParts[i]);
+        if (/^[+-]?\d+$/.test(val)) {
+          affinityIndex = i;
+          break;
+        }
+      }
+
+      if (affinityIndex !== -1) {
+        const suggestionRaw = allParts.slice(0, affinityIndex).join('，');
+        const affinityRaw = allParts[affinityIndex];
+        const tagsRaw = allParts.slice(affinityIndex + 1).join('，');
+        values = [suggestionRaw, affinityRaw, tagsRaw];
+      } else {
+        // 退化方案
+        const parts = splitByLastDelimiter(line);
+        const left = parts[0] ?? '';
+        const tagsRaw = parts[1] ?? '';
+        const parts2 = splitByLastDelimiter(left);
+        const suggestionRaw = parts2[0] ?? '';
+        const affinityRaw = parts2[1] ?? '';
+        values = [suggestionRaw, affinityRaw, tagsRaw];
+      }
     } else {
       values = csvSplit(line);
     }

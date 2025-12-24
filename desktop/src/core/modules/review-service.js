@@ -133,8 +133,68 @@ export default class ReviewService {
             }
         }
 
-        // 5. 补充 ghost_options 和 录音关联
-        report('enrich', 0.82, '补齐未选择路径与录音关联...');
+        // 5. 合并 LLM 分析 + 系统记录
+        report('enrich', 0.82, '合并 LLM 分析与系统记录...');
+        
+        // 策略：LLM 提供 reasoning 和 node_title，系统记录提供准确的选择状态
+        const llmNodes = Array.isArray(reviewData.nodes) ? reviewData.nodes : [];
+        const sysNodesMap = new Map(explicitReviewNodes.map(n => [n.node_id, n]));
+        
+        if (llmNodes.length > 0) {
+            // LLM 输出了节点：合并两者
+            const mergedNodes = llmNodes.map((llmNode) => {
+                const sysNode = sysNodesMap.get(llmNode.node_id);
+                if (sysNode) {
+                    // 对于系统已有的决策点
+                    const isSystemSelected = sysNode.choice_type === 'matched';
+                    return {
+                        node_id: llmNode.node_id,
+                        node_title: llmNode.node_title || sysNode.node_title,
+                        timestamp: sysNode.timestamp,
+                        // 选择状态：优先使用系统显式选择；若无，使用 LLM 的判定
+                        choice_type: isSystemSelected ? 'matched' : (llmNode.choice_type || 'custom'),
+                        matched_suggestion_id: sysNode.selected_suggestion_id || llmNode.matched_suggestion_id,
+                        selected_suggestion_id: sysNode.selected_suggestion_id,
+                        selected_affinity_delta: sysNode.selected_affinity_delta,
+                        // 描述和推理：使用 LLM 分析（更丰富）
+                        user_description: llmNode.user_description || sysNode.user_description,
+                        reasoning: llmNode.reasoning || sysNode.reasoning,
+                        match_confidence: llmNode.match_confidence,
+                        ghost_options: []
+                    };
+                } else {
+                    // LLM 额外识别的 Insight 节点
+                    return {
+                        ...llmNode,
+                        choice_type: 'insight',
+                        ghost_options: []
+                    };
+                }
+            });
+
+            // 检查是否有系统决策点被 LLM 漏掉了
+            const mergedIds = new Set(mergedNodes.map(n => n.node_id));
+            explicitReviewNodes.forEach(sysNode => {
+                if (!mergedIds.has(sysNode.node_id)) {
+                    mergedNodes.push(sysNode);
+                }
+            });
+
+            // 按时间排序
+            reviewData.nodes = mergedNodes.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+            console.log(`[ReviewService] 已合并 LLM 分析与系统记录 (LLM:${llmNodes.length}, Sys:${explicitReviewNodes.length}, Result:${reviewData.nodes.length})`);
+        } else {
+            // LLM 未输出节点：回退到系统记录
+            console.warn('[ReviewService] LLM 未输出任何节点，使用系统记录');
+            reviewData.nodes = explicitReviewNodes;
+        }
+
+        reviewData.has_nodes = reviewData.nodes.length > 0;
+        if (!reviewData.summary) reviewData.summary = {};
+        reviewData.summary.node_count = reviewData.nodes.length;
+        reviewData.summary.matched_count = reviewData.nodes.filter((n) => n.choice_type === 'matched').length;
+        reviewData.summary.custom_count = reviewData.nodes.filter((n) => n.choice_type === 'custom' || n.choice_type === 'insight').length;
+
         this.enrichGhostOptions(reviewData, nodes);
         this.enrichAudioInfo(reviewData, conversationId);
 
@@ -511,7 +571,7 @@ export default class ReviewService {
                 node_id: node.node_id,
                 node_title: selected?.title || '已选择建议',
                 timestamp: node.timestamp || 0,
-                choice_type: selected ? 'selected' : 'unselected',
+                choice_type: selected ? 'matched' : 'custom',
                 selected_suggestion_id: selected?.id || null,
                 selected_affinity_delta: typeof selected?.affinity_prediction === 'number' ? selected.affinity_prediction : null,
                 user_description: selected?.content || selected?.title || (selected ? '已选择建议' : '未选择建议'),
@@ -535,44 +595,72 @@ export default class ReviewService {
         const client = await this.ensureClient('review');
         const prompt = this.buildReviewPrompt(messages, nodes);
 
-        console.log('[ReviewService] Sending prompt to LLM:', prompt);
+        console.log('[ReviewService] Sending prompt to LLM (Streaming):', prompt);
 
-        let completion;
+        let fullContent = '';
         const timeoutMs = this.resolveTimeoutMs(this.currentLLMConfig, DEFAULT_REVIEW_TIMEOUT_MS);
         const controller = new AbortController();
-        const timer = setTimeout(() => {
-            controller.abort(new Error('LLM生成超时，请稍后重试'));
-        }, timeoutMs);
+
+        let timer = null;
+        const resetTimer = () => {
+            if (timer) clearTimeout(timer);
+            timer = setTimeout(() => {
+                controller.abort(new Error(`LLM 生成响应超时（${timeoutMs}ms内无新数据）`));
+            }, timeoutMs);
+        };
+
         try {
-            completion = await client.chat.completions.create({
+            resetTimer(); // 初始请求开始计时
+            const stream = await client.chat.completions.create({
                 model: this.currentLLMConfig.model_name,
                 messages: [{ role: 'user', content: prompt }],
                 max_tokens: 20000, // 按 200k context 来，给足输出空间
-                reasoning_effort: "high", // 启用推理过程（仅用于复盘）
-                stream: false
+                stream: true,
+                thinking: { type: 'enabled' }  // 启用 GLM-4.7 深度思考
             }, { signal: controller.signal });
+
+            let chunkCount = 0;
+            for await (const chunk of stream) {
+                chunkCount++;
+                const delta = chunk.choices?.[0]?.delta;
+                if (!delta) continue;
+
+                // GLM-4.7: reasoning_content 是思考，content 是输出
+                const reasoningContent = delta.reasoning_content || '';
+                const content = delta.content || '';
+
+                if (reasoningContent || content) {
+                    fullContent += content; // 只保存 content
+                    resetTimer(); // 有任何输出就重置计时器
+                }
+
+                if (chunkCount <= 3 && content) {
+                    console.log(`[ReviewService] Chunk ${chunkCount} content preview:`, content.slice(0, 50));
+                }
+            }
+
+            console.log(`[ReviewService] Stream finished. Total chunks: ${chunkCount}`);
         } catch (apiError) {
-            console.error('[ReviewService] LLM API 调用失败:', apiError);
+            if (apiError.name === 'AbortError') {
+                console.error('[ReviewService] LLM API 调用超时中断');
+                throw new Error(`LLM API 生成响应超时，已自动中断（活跃超时限制: ${timeoutMs}ms）`);
+            }
+            console.error('[ReviewService] LLM API 流式调用失败:', apiError);
             throw new Error(`LLM API 调用失败: ${apiError.message || apiError}`);
         } finally {
-            clearTimeout(timer);
+            if (timer) clearTimeout(timer);
         }
 
-        console.log('[ReviewService] LLM API 响应:', JSON.stringify(completion, null, 2));
+        console.log('[ReviewService] LLM Stream Completed. Full length:', fullContent.length);
 
-        if (!completion || !completion.choices || !completion.choices[0]) {
-            console.error('[ReviewService] LLM 响应格式异常:', completion);
-            throw new Error('LLM 响应格式异常，请检查 API 配置');
-        }
-
-        const content = completion.choices[0]?.message?.content;
-        console.log('[ReviewService] LLM Response:', content);
-
-        if (!content || !content.trim()) {
+        if (!fullContent || !fullContent.trim()) {
             throw new Error('LLM response is empty or invalid');
         }
 
-        return this.parseReviewToon(content, nodes);
+        // 打印简短预览用于调试
+        console.log('[ReviewService] LLM Response Preview:', fullContent.slice(0, 100).replace(/\n/g, '\\n') + '...');
+
+        return this.parseReviewToon(fullContent, nodes);
     }
 
     csvSplit(line) {
@@ -616,7 +704,36 @@ export default class ReviewService {
                 nodes: []
             };
         }
-        const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+
+        // 预处理：处理引号内的换行符，将跨行记录合并为单行
+        const rawLines = text.split('\n');
+        const lines = [];
+        let buffer = '';
+        let inQuotes = false;
+
+        for (const line of rawLines) {
+            const currentLine = line.trim();
+            if (!currentLine && !inQuotes) continue;
+
+            if (buffer) {
+                buffer += '\n' + line;
+            } else {
+                buffer = line;
+            }
+
+            // 统计未转义的引号
+            for (let i = 0; i < line.length; i++) {
+                if (line[i] === '"' && (i === 0 || line[i - 1] !== '\\')) {
+                    inQuotes = !inQuotes;
+                }
+            }
+
+            if (!inQuotes) {
+                lines.push(buffer.trim());
+                buffer = '';
+            }
+        }
+        if (buffer) lines.push(buffer.trim());
 
         const result = {
             version: "1.0",
@@ -625,103 +742,114 @@ export default class ReviewService {
             nodes: []
         };
 
-        // 辅助函数：尝试从一行中提取定义和数据
-        const extractFromLine = (line, regex) => {
-            const match = line.match(regex);
-            if (!match) return null;
-            const contentInBraces = match[1]; // 第一个捕获组 (Fixed: match[2] -> match[1])
-            const suffix = line.substring(match[0].length).trim();
-            return { fieldsText: contentInBraces, suffix, match };
-        };
+        // 解析 summary
+        const summaryHeaderRegex = /^review_summary\[(\d+)\]\{([^}]+)\}:?/;
+        const summaryHeaderIndex = lines.findIndex(l => l.match(summaryHeaderRegex));
+        if (summaryHeaderIndex !== -1) {
+            const headerLine = lines[summaryHeaderIndex];
+            const headerMatch = headerLine.match(summaryHeaderRegex);
+            const fieldsContent = headerMatch?.[2] || "";
+            
+            // 预期字段顺序
+            const expectedFields = [
+                'total_affinity_change', 'title', 'conversation_summary', 'self_evaluation', 
+                'chat_overview', 'expression_score', 'expression_desc', 'topic_score', 
+                'topic_desc', 'tags', 'attitude_analysis'
+            ];
+            
+            let parts = [];
+            // 启发式判断：如果大括号内包含引号、数字或加减号，认为数据被错误地填入了括号内（模型幻觉）
+            const hasDataInBraces = fieldsContent.includes('"') || fieldsContent.includes('+') || fieldsContent.includes('-') || /\d/.test(fieldsContent);
+            
+            if (hasDataInBraces) {
+                parts = this.csvSplit(fieldsContent);
+            } else if (lines[summaryHeaderIndex + 1]) {
+                parts = this.csvSplit(lines[summaryHeaderIndex + 1]);
+            }
 
-        const summaryRegex = /^review_summary.*?[:\[\{](.+?)[:\]\}]?$/;
-        // 兼容旧格式 review_nodes 和新格式 review_node
-        const nodesRegex = /^(?:review_nodes|review_node).*?[:\[\{](.+?)[:\]\}]?$/;
+            if (parts.length > 0) {
+                const summaryMap = {};
+                expectedFields.forEach((field, idx) => {
+                    summaryMap[field] = parts[idx] ?? '';
+                });
 
-        // 1. 解析 Summary
-        const summaryIdx = lines.findIndex(l => l.match(summaryRegex));
-        if (summaryIdx !== -1) {
-            const info = extractFromLine(lines[summaryIdx], summaryRegex);
-
-            if (info && info.fieldsText) {
-                const fields = info.fieldsText.split(',').map(f => f.trim());
-
-                // 策略：如果后缀不为空，后缀即是数据；否则看下一行
-                let dataLine = info.suffix || lines[summaryIdx + 1] || "";
-
-                // 1. 如果当前行已经包含了数据，不用找下一行
-                if (!info.suffix && info.fieldsText && info.fieldsText.length > 10) {
-                    // 简单判断：如果 fieldsText 不要看起来像 header
-                    if (!info.fieldsText.includes('total_affinity_change') && (info.fieldsText.match(/,/g) || []).length >= 2) {
-                        dataLine = info.fieldsText;
+                result.summary.total_affinity_change = parseInt(summaryMap.total_affinity_change) || 0;
+                result.summary.title = summaryMap.title || "";
+                // 优先 chat_overview 填充概要，其次 conversation_summary
+                result.summary.conversation_summary = summaryMap.conversation_summary || summaryMap.chat_overview || "";
+                result.summary.self_evaluation = summaryMap.self_evaluation || "";
+                result.summary.chat_overview = summaryMap.chat_overview || result.summary.conversation_summary;
+                // 解析用户表现评价的评分
+                result.summary.performance_evaluation = {
+                    expression_ability: {
+                        score: parseInt(summaryMap.expression_score) || null,
+                        description: summaryMap.expression_desc || ""
+                    },
+                    topic_selection: {
+                        score: parseInt(summaryMap.topic_score) || null,
+                        description: summaryMap.topic_desc || ""
                     }
-                }
-
-                // 如果数据行看起来像是定义/Header，则重置为空
-                if (dataLine.match(/^review_/) || dataLine.match(/^\[ReviewService\]/) || dataLine.includes('total_affinity_change')) dataLine = "";
-
-                if (dataLine) {
-                    const parts = this.csvSplit(dataLine);
-                    const summaryMap = {};
-                    const actualFields = ["total_affinity_change", "title", "conversation_summary", "self_evaluation", "chat_overview", "expression_score", "expression_desc", "topic_score", "topic_desc", "tags", "attitude_analysis"];
-                    actualFields.forEach((f, i) => summaryMap[f] = parts[i] || "");
-
-                    // Save to result logic below...
-
-                    result.summary.total_affinity_change = parseInt(summaryMap.total_affinity_change) || 0;
-                    result.summary.title = summaryMap.title || "";
-                    result.summary.conversation_summary = summaryMap.conversation_summary || summaryMap.chat_overview || "";
-                    result.summary.self_evaluation = summaryMap.self_evaluation || "";
-                    result.summary.chat_overview = summaryMap.chat_overview || result.summary.conversation_summary;
-                    result.summary.performance_evaluation = {
-                        expression_ability: { score: parseInt(summaryMap.expression_score) || null, description: summaryMap.expression_desc || "" },
-                        topic_selection: { score: parseInt(summaryMap.topic_score) || null, description: summaryMap.topic_desc || "" }
-                    };
-                    result.summary.tags = (summaryMap.tags || "").split(/[;；]/).map(t => t.trim()).filter(Boolean);
-                    result.summary.attitude_analysis = summaryMap.attitude_analysis || "";
-                }
+                };
+                // 解析 Tags
+                result.summary.tags = (summaryMap.tags || "").split(/[;；]/).map(t => t.trim()).filter(Boolean);
+                // 解析对象态度分析
+                result.summary.attitude_analysis = summaryMap.attitude_analysis || "";
             }
         }
 
-        // 2. 解析 Nodes
-        // 查找所有以 review_nodes 开头的行
-        lines.forEach((line, idx) => {
-            const info = extractFromLine(line, nodesRegex);
-            if (!info) return;
+        // 解析 nodes
+        const nodesHeaderRegex = /^(?:review_nodes|review_node)\[(\d+)\]\{([^}]+)\}:?/;
+        const headerLineIndex = lines.findIndex(l => l.match(nodesHeaderRegex));
 
-            // 处理逻辑：
-            // A. 数据在当前行后缀
-            // B. 数据在下一行
-            // C. 数据就在当前行的 {} 里面（LLM 常见错误）
-
-            let dataLines = [];
-            if (info.suffix) {
-                dataLines.push(info.suffix);
-            } else {
-                // Check if fieldsText is already data
-                const text = info.fieldsText;
-                const isHeader = text && (text.toLowerCase().includes('node_id') || text.toLowerCase().includes('decision_point_id') || text.includes('review_node'));
-                const hasCommas = text && (text.includes(',') || text.includes('，'));
-
-                if (hasCommas && !isHeader) {
-                    dataLines.push(text);
-                } else {
-                    // Fallback: look for data in following lines
-                    for (let i = idx + 1; i < lines.length; i++) {
-                        if (lines[i].match(/^review_/)) break;
-                        dataLines.push(lines[i]);
+        // 策略：无论有没有 header，都尝试寻找 review_node: 开头的行
+        const potentialNodeLines = lines.filter(l => l.trim().startsWith('review_node:'));
+        
+        if (headerLineIndex !== -1 || potentialNodeLines.length > 0) {
+            // 如果有 header，先处理 header 括号里的数据（模型有时会把第一条数据挤在括号里）
+            if (headerLineIndex !== -1) {
+                const headerLine = lines[headerLineIndex];
+                const headerMatch = headerLine.match(nodesHeaderRegex);
+                const fieldsContent = headerMatch?.[2] || "";
+                
+                const hasDataInBraces = fieldsContent.includes('"') || fieldsContent.includes('node_');
+                if (hasDataInBraces && !fieldsContent.includes('node_id')) {
+                    const parts = this.csvSplit(fieldsContent);
+                    if (parts.length >= 7) {
+                        const nodeId = parts[0];
+                        const originalNode = originalNodes.find(n => n.node_id === nodeId);
+                        result.nodes.push({
+                            node_id: nodeId,
+                            node_title: parts[1],
+                            timestamp: originalNode ? originalNode.timestamp : 0,
+                            choice_type: parts[2] === 'matched' ? 'matched' : (parts[2] === 'insight' ? 'insight' : 'custom'),
+                            matched_suggestion_id: parts[3] || null,
+                            match_confidence: parseFloat(parts[4]) || 0,
+                            user_description: parts[5],
+                            reasoning: parts[6],
+                            ghost_options: []
+                        });
                     }
                 }
             }
 
-            dataLines.forEach(dl => {
-                const parts = this.csvSplit(dl);
-                if (parts.length >= 6) { // node_id,title,type,matched_id,conf,desc,reasoning
+            // 处理所有以 review_node: 开头的行
+            potentialNodeLines.forEach(line => {
+                // 去掉前缀
+                const content = line.replace(/^review_node:\s*/, '').trim();
+                if (!content.includes(',')) return;
+
+                const parts = this.csvSplit(content);
+                if (parts.length >= 7) {
                     let nodeId = parts[0];
                     if (nodeId && !nodeId.startsWith('node_') && !isNaN(nodeId)) {
                         nodeId = `node_${nodeId}`;
                     }
-                    const originalNode = originalNodes?.find(n => n.node_id === nodeId);
+                    
+                    // 避免重复（如果 header 处理逻辑已经加过了）
+                    if (result.nodes.some(n => n.node_id === nodeId)) return;
+
+                    const originalNode = originalNodes.find(n => n.node_id === nodeId);
+
                     result.nodes.push({
                         node_id: nodeId,
                         node_title: parts[1],
@@ -730,14 +858,43 @@ export default class ReviewService {
                         matched_suggestion_id: parts[3] || null,
                         match_confidence: parseFloat(parts[4]) || 0,
                         user_description: parts[5],
-                        reasoning: parts[6] || "",
+                        reasoning: parts[6],
                         ghost_options: []
                     });
                 }
             });
-        });
 
-        // 去重（防止 LLM 每行都重复 header 导致重复解析）
+            // 如果连 review_node: 前缀都没写，只是纯 CSV 行（最后兜底）
+            if (result.nodes.length === 0 && headerLineIndex !== -1) {
+                for (let i = headerLineIndex + 1; i < lines.length; i++) {
+                    const line = lines[i];
+                    if (line.match(/^review_summary/)) break;
+                    if (line.startsWith('review_node:')) continue; // 已经处理过了
+                    if (!line.includes(',')) continue;
+
+                    const parts = this.csvSplit(line);
+                    if (parts.length >= 7 && (parts[0].startsWith('node_') || !isNaN(parts[0]))) {
+                        let nodeId = parts[0];
+                        if (!nodeId.startsWith('node_')) nodeId = `node_${nodeId}`;
+                        
+                        const originalNode = originalNodes.find(n => n.node_id === nodeId);
+                        result.nodes.push({
+                            node_id: nodeId,
+                            node_title: parts[1],
+                            timestamp: originalNode ? originalNode.timestamp : 0,
+                            choice_type: parts[2] === 'matched' ? 'matched' : (parts[2] === 'insight' ? 'insight' : 'custom'),
+                            matched_suggestion_id: parts[3] || null,
+                            match_confidence: parseFloat(parts[4]) || 0,
+                            user_description: parts[5],
+                            reasoning: parts[6],
+                            ghost_options: []
+                        });
+                    }
+                }
+            }
+        }
+
+        // 去重
         const seenNodes = new Set();
         result.nodes = result.nodes.filter(n => {
             if (seenNodes.has(n.node_id)) return false;
@@ -804,14 +961,15 @@ export default class ReviewService {
 
         safe.has_nodes = safe.nodes.length > 0;
         safe.summary.node_count = safe.nodes.length;
-
+        
         // 关键决策：原始输入中存在的节点（带系统建议）
         safe.summary.decision_count = safe.nodes.filter(n => n.has_source).length;
         // 转折点/Insight：LLM 额外识别的节点
         safe.summary.insight_count = safe.nodes.filter(n => !n.has_source).length;
 
         safe.summary.matched_count = safe.nodes.filter(n => n.choice_type === 'matched').length;
-        safe.summary.custom_count = safe.nodes.filter(n => n.choice_type === 'custom').length;
+        safe.summary.custom_count = safe.nodes.filter(n => n.choice_type === 'custom' || n.choice_type === 'insight').length;
+
         if (safe.summary.total_affinity_change === undefined || safe.summary.total_affinity_change === null) {
             safe.summary.total_affinity_change = conversation?.affinity_change || 0;
         }
@@ -862,8 +1020,10 @@ export default class ReviewService {
             reviewNode.has_source = !!original;
 
             if (original) {
+                // 使用系统记录的 selected_suggestion_id（优先）或 LLM 的 matched_suggestion_id
+                const actualSelectedId = reviewNode.selected_suggestion_id || reviewNode.matched_suggestion_id;
                 reviewNode.ghost_options = original.suggestions
-                    .filter(s => s.id !== reviewNode.matched_suggestion_id) // Filter out matched one
+                    .filter(s => s.id !== actualSelectedId) // 过滤掉实际选中的
                     .map(s => ({
                         suggestion_id: s.id,
                         content: s.content || s.title

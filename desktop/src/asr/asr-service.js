@@ -219,8 +219,12 @@ class ASRService {
       MODELSCOPE_OFFLINE: useOfflineMode ? '1' : '',
       HF_HUB_OFFLINE: useOfflineMode ? '1' : '',
       PYTHONUNBUFFERED: '1',
+      PYTHONIOENCODING: 'utf-8',
       // API Key for Cloud Mode
-      SILICONFLOW_API_KEY: process.env.SILICONFLOW_API_KEY || 'sk-ibgtosfhnbfqninyembtocpvxbvhmjornzblefmylejgvklk'
+      SILICONFLOW_API_KEY: process.env.SILICONFLOW_API_KEY || '',
+      BAIDU_APP_ID: process.env.BAIDU_APP_ID || '',
+      BAIDU_API_KEY: process.env.BAIDU_API_KEY || '',
+      BAIDU_SECRET_KEY: process.env.BAIDU_SECRET_KEY || ''
     };
     
     if (useOfflineMode) {

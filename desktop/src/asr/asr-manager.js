@@ -11,9 +11,9 @@ import { createSentenceHandlers } from './sentence-handlers.js';
  * 协调 Whisper 服务和数据库操作
  */
 class ASRManager {
-  constructor() {
+  constructor(dbInstance = null) {
     this.whisperService = null; // 延迟初始化
-    this.db = new DatabaseManager();
+    this.db = dbInstance || new DatabaseManager();
     this.isInitialized = false;
     this.isRunning = false;
 
@@ -125,9 +125,10 @@ class ASRManager {
 
       logger.log('ASR Config:', config);
       const pauseThresholdSec = Number(config?.sentence_pause_threshold) || 1.2;
-      // 仅云端（cloud）允许更低的静音断句阈值；FunASR 保持原有下限，避免行为改变
-      const isCloudModel = String(config?.model_name || '').includes('cloud');
-      const minSilenceMs = isCloudModel ? 250 : 800;
+      // 仅云端（cloud）或者百度（baidu）允许更低的静音断句阈值；
+      // 注意：百度 WebSocket 自带断句，我们这里调高本地兜底阈值，避免干扰百度
+      const isCloudModel = String(config?.model_name || '').includes('cloud') || String(config?.model_name || '').includes('baidu');
+      const minSilenceMs = isCloudModel ? 3000 : 800; // 如果是云端/百度，本地静音兜底延长到 3s
       this.SILENCE_TIMEOUT = Math.max(minSilenceMs, Math.round(pauseThresholdSec * 1000));
       logger.log(`Silence timeout set to ${this.SILENCE_TIMEOUT}ms based on sentence_pause_threshold=${pauseThresholdSec}`);
 
@@ -639,6 +640,12 @@ class ASRManager {
 
       // 【斩断所有分段】停止时提交所有进行中的分段
       this.commitAllSegments();
+
+      // 【清理】通知后端关闭所有会话连接，避免产生 -3101 等超时报错
+      if (typeof this.whisperService.sendResetCommand === 'function') {
+        await this.whisperService.sendResetCommand('speaker1');
+        await this.whisperService.sendResetCommand('speaker2');
+      }
 
       logger.log('ASR stopped');
     } catch (error) {

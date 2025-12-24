@@ -12,6 +12,18 @@ export const ASR_MODEL_PRESETS = [
     isDefault: true,
     isRemote: true,
   },
+  // 百度实时 ASR (Demo)
+  {
+    id: 'baidu-cloud',
+    label: 'Baidu Cloud (Demo)',
+    description: '百度语音实时识别 API，低延迟，高精度，需联网。',
+    engine: 'baidu',
+    sizeBytes: 0,
+    recommendedSpec: '任意配置',
+    speedHint: '网络延迟',
+    language: 'zh',
+    isRemote: true,
+  },
   // FunASR ONNX 模型
   // 2-Pass 架构: VAD + 流式ASR + 离线ASR + 标点
   {
@@ -63,6 +75,8 @@ export const ASR_MODEL_PRESETS = [
 export function getAsrModelPreset(modelId) {
   return ASR_MODEL_PRESETS.find((preset) => preset.id === modelId);
 }
+
+
 
 
 

@@ -87,8 +87,16 @@ export default class DatabaseBase {
 
     // 创建数据库连接
     this.db = new Database(this.dbPath, {
-      verbose: console.log // 打开 SQL 语句日志，方便调试
+      // 过滤掉注释和空行，减少乱码可能性并保持日志整洁
+      verbose: (sql) => {
+        if (sql.trim().startsWith('--')) return;
+        console.log(sql);
+      } 
     });
+
+    // 启用 WAL 模式以提高性能和并发
+    this.db.pragma('journal_mode = WAL');
+    this.db.pragma('synchronous = NORMAL');
 
     try {
       fs.accessSync(this.dbPath, fs.constants.W_OK);
