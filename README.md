@@ -23,6 +23,8 @@
 
 <img width="100%" alt="preview" src="https://github.com/user-attachments/assets/d6c44e31-8362-4825-9d7c-a760a4720133" />
 
+<img width="100%" alt="recent preview" src="./docs/20251225-004407.gif" />
+
 ---
 
 ## 核心功能
