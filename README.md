@@ -133,7 +133,8 @@ B站视频：[【修复了GalGame玩家和女生聊天没有字幕的Bug】](htt
 ---
 
 ## 🤝 加入我们
-
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/JStone2934/LiveGalGame)
+可以先通过 deepwiki 看一下项目进展！
 **QQ 群：1074602400**
 
 欢迎自由开发，有活你就直接往里加！
