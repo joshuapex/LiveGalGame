@@ -25,6 +25,10 @@
 
 <img width="100%" alt="recent preview" src="./docs/20251225-004407.gif" />
 
+**QQ 群：1074602400**
+
+欢迎自由开发，提交 Issue 和 Pull Request 都非常欢迎。
+
 ---
 
 ## 核心功能
@@ -124,11 +128,6 @@ B站视频：[【修复了GalGame玩家和女生聊天没有字幕的Bug】](htt
 
 <img width="100%" alt="demo" src="https://github.com/user-attachments/assets/65dd6c6f-bf47-4bc0-9695-034c7faa290d" />
 
----
-
-## ⭐ Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=JStone2934/LiveGalGame&type=Date)](https://star-history.com/#JStone2934/LiveGalGame&Date)
 
 ---
 
